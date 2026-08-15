@@ -21,12 +21,6 @@ DeepSeek Harness auto-approval plugin: adds two permission presets — **semi-au
 
 Both modes share the same L0 deterministic rules and L1 LLM classifier; the only difference is the **L2 human fallback**: semi-auto keeps the human popup, full-auto treats the LLM decision as final. Hard deny (L0 guard) and the `preflight` switch behave identically in both modes.
 
-## Key differences from similar plugins
-
-- **Sandbox stays workspace-write**: even if the LLM misjudges and allows, file writes remain confined to the workspace by the sandbox (vs `@nanmicoder/dsh-auto-mode`, which uses danger-full-access).
-- **Unrecognized tools go to LLM classification by default instead of being allowed** — but `run_code` passes directly as a code-execution container; every tool call inside it is still evaluated by this policy and the sandbox.
-- **fail-closed**: classifier errors / timeouts / no route / malformed output always deny; the denied party (AI) proactively escalates to human approval as appropriate.
-
 ## Install
 
     # Install from GitHub (compiled lib/ is committed)
