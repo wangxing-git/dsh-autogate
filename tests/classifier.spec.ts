@@ -45,6 +45,11 @@ describe('CLASSIFIER_SYSTEM_PROMPT 场景覆盖', () => {
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('follow-up')
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('inherits that authorization')
   })
+  it('覆盖 ask_user_question 问答对作为授权依据（回答是授权、问题不是）', () => {
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('ask_user_question')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('回答')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('NOT authority')
+  })
   it('关键路径删除的硬边界不退化', () => {
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('user home ROOT')
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('filesystem root')

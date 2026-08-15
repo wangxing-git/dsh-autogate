@@ -188,6 +188,32 @@ describe('apply 注册的 escalation answerer（approval/request）', () => {
     const lastInput = JSON.parse(capturedCalls[capturedCalls.length - 1].messages[0].content[0].text)
     expect(lastInput.arguments.command).toBe('echo hello > /tmp/x')
   })
+
+  it('escalation 审批时 ask_user_question 问答对进入分类器上下文（识别用户授权）', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any)
+    // 构造含 ask_user_question 问答对事件的 agent（用户在问答中授权写入全局 .gitconfig）。
+    const agent = {
+      session: {
+        events: [
+          { type: 'permission/preset', data: { preset: 'auto-ask' } },
+          { type: 'tool/call', data: { callId: 'ask-esc', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'q1', question: '是否允许写入全局 .gitconfig 配置假邮箱' }] }) } },
+          { type: 'tool/result', data: { message: { source: { kind: 'tool', callId: 'ask-esc' }, content: [{ type: 'tool-result', toolCallId: 'ask-esc', content: [{ type: 'text', text: JSON.stringify({ answers: [{ id: 'q1', selected: ['允许'] }] }) }] }] } } },
+        ],
+        header: { cwd: '/ws' },
+      },
+      options: { provider: 'deepseek', model: 'deepseek-chat' },
+    }
+    const answerer = listeners.get('approval/request')![0]
+    const req = { agent, toolName: 'bash', reason: 'escalate sandbox to danger-full-access: 写入全局 gitconfig 假邮箱', signal: undefined }
+    const next = async (): Promise<ApprovalOutcome> => 'rejected'
+    await answerer(req, next)
+    const lastInput = JSON.parse(capturedCalls[capturedCalls.length - 1].messages[0].content[0].text)
+    expect(lastInput.trustedUserMessages).toHaveLength(1)
+    expect(lastInput.trustedUserMessages[0]).toContain('是否允许写入全局 .gitconfig 配置假邮箱')
+    expect(lastInput.trustedUserMessages[0]).toContain('允许')
+    expect(lastInput.trustedUserMessages[0]).toContain('[ask_user_question]')
+  })
 })
 
 describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
@@ -367,19 +393,81 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
     expect(classifierInput(capturedCalls).trustedUserMessages).toEqual(['允许清理'])
   })
 
-  it('最多取最近 4 条直接人类消息', async () => {
+  it('最多取最近 8 条直接人类消息', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
     apply(ctx as any, { preflight: true })
     const agent = agentWithEvents([
       presetAuto,
-      userMessage('允许操作 1'),
-      userMessage('允许操作 2'),
-      userMessage('允许操作 3'),
-      userMessage('允许操作 4'),
-      userMessage('允许操作 5'),
+      ...Array.from({ length: 10 }, (_, i) => userMessage('允许操作 ' + (i + 1))),
     ])
     await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-trust3'), async () => ({ kind: 'allow' }))
-    expect(classifierInput(capturedCalls).trustedUserMessages).toEqual(['允许操作 2', '允许操作 3', '允许操作 4', '允许操作 5'])
+    const messages = classifierInput(capturedCalls).trustedUserMessages
+    expect(messages).toHaveLength(8)
+    expect(messages).toEqual(['允许操作 3', '允许操作 4', '允许操作 5', '允许操作 6', '允许操作 7', '允许操作 8', '允许操作 9', '允许操作 10'])
+  })
+
+  // ask_user_question 的 tool/call 事件（问题随未解析的 JSON 参数落盘）。
+  const askQuestion = (callId: string, question: string, options?: string[]) => ({
+    type: 'tool/call',
+    data: {
+      callId,
+      name: 'ask_user_question',
+      arguments: JSON.stringify({
+        questions: [{ id: 'q1', question, ...(options === undefined ? {} : { options: options.map(label => ({ label })) }) }],
+      }),
+    },
+  })
+  // ask_user_question 的 tool/result 事件（答案以 compact JSON 文本呈现）。
+  const askAnswer = (callId: string, answer: { selected?: string[], custom?: string }) => ({
+    type: 'tool/result',
+    data: {
+      message: {
+        source: { kind: 'tool', callId },
+        content: [{ type: 'tool-result', toolCallId: callId, content: [{ type: 'text', text: JSON.stringify({ answers: [{ id: 'q1', ...answer }] }) }] }],
+      },
+    },
+  })
+
+  it('ask_user_question 问答对进入审批上下文（问题+回答）', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any, { preflight: true })
+    const agent = agentWithEvents([
+      presetAuto,
+      askQuestion('ask-1', '是否清理 /tmp', ['是', '否']),
+      askAnswer('ask-1', { selected: ['是'] }),
+    ])
+    await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-ask1'), async () => ({ kind: 'allow' }))
+    const messages = classifierInput(capturedCalls).trustedUserMessages
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toContain('[ask_user_question]')
+    expect(messages[0]).toContain('是否清理 /tmp')
+    expect(messages[0]).toContain('(选项: 是/否)')
+    expect(messages[0]).toContain('回答: q1: 是')
+  })
+
+  it('ask_user_question 回答中的凭据被脱敏', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any, { preflight: true })
+    const agent = agentWithEvents([
+      presetAuto,
+      askQuestion('ask-2', '请输入访问令牌'),
+      askAnswer('ask-2', { custom: 'ghp_abcdefghijklmnopqrst' }),
+    ])
+    await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-ask2'), async () => ({ kind: 'allow' }))
+    const messages = classifierInput(capturedCalls).trustedUserMessages
+    expect(messages[0]).toContain('[redacted-secret]')
+    expect(messages[0]).not.toContain('ghp_abcdefghijklmnopqrst')
+  })
+
+  it('忽略非 ask_user_question 的 tool/result', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any, { preflight: true })
+    const agent = agentWithEvents([
+      presetAuto,
+      { type: 'tool/result', data: { message: { source: { kind: 'tool', callId: 'other' }, content: [{ type: 'tool-result', toolCallId: 'other', content: [{ type: 'text', text: '{"foo":1}' }] }] } } },
+    ])
+    await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-ask3'), async () => ({ kind: 'allow' }))
+    expect(classifierInput(capturedCalls).trustedUserMessages).toEqual([])
   })
 })
 

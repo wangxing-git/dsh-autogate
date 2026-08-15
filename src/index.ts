@@ -218,24 +218,125 @@ function modelRoute(agent: ToolExecution['agent']): Pick<LlmCallConfig, 'provide
   return provider === undefined || model === undefined ? undefined : { provider, model }
 }
 
+/**
+ * 审批上下文的「授权依据」：最近的直接人类消息，以及 ask_user_question 的问答对。
+ * 问答对中问题是 AI 提问（提供上下文），回答是用户选择（授权本身）；两者一并脱敏、
+ * 限界后进入分类器，使分类器能识别「用户已通过问答明确授权」而不再重复人工弹窗。
+ */
 function trustedUserMessages(authority: ToolExecution['agent']): string[] {
   if (authority === undefined) return []
   const messages: string[] = []
   let remaining = 4_000
-  for (let index = authority.session.events.length - 1; index >= 0 && messages.length < 4 && remaining > 0; index -= 1) {
+
+  // 第一阶段：建立 ask_user_question 的 callId → 问题文本 映射（问题随 tool/call 落盘）。
+  const askQuestions = new Map<string, string>()
+  for (const event of authority.session.events) {
+    if (event.type !== 'tool/call' || event.data.name !== 'ask_user_question') continue
+    const text = askUserQuestionsText(event.data.arguments)
+    if (text !== '') askQuestions.set(String(event.data.callId), text)
+  }
+
+  // 第二阶段：从后往前收集最近的直接人类消息与问答对（最近优先）。
+  for (let index = authority.session.events.length - 1; index >= 0 && messages.length < 8 && remaining > 0; index -= 1) {
     const event = authority.session.events[index]
-    if (event?.type !== 'user/message' || event.data.source.kind !== 'user') continue
-    const text = event.data.content
-      .filter((block): block is Extract<(typeof event.data.content)[number], { type: 'text' }> => block.type === 'text')
-      .map(block => block.text)
-      .join('\n')
-      .trim()
-    if (text === '') continue
-    const sanitized = sanitizeClassifierText(text).slice(0, remaining)
-    messages.push(sanitized)
-    remaining -= sanitized.length
+    if (event?.type === 'user/message' && event.data.source.kind === 'user') {
+      const text = event.data.content
+        .filter((block): block is Extract<(typeof event.data.content)[number], { type: 'text' }> => block.type === 'text')
+        .map(block => block.text)
+        .join('\n')
+        .trim()
+      if (text === '') continue
+      const sanitized = sanitizeClassifierText(text).slice(0, remaining)
+      messages.push(sanitized)
+      remaining -= sanitized.length
+      continue
+    }
+    if (event?.type === 'tool/result') {
+      const answer = askUserAnswerText(event.data.message)
+      if (answer === '') continue
+      const question = askQuestions.get(String(event.data.message.source.callId))
+      const combined = question === undefined
+        ? '[ask_user_question] 回答: ' + answer
+        : '[ask_user_question] 问题: ' + question + '；回答: ' + answer
+      const sanitized = sanitizeClassifierText(combined).slice(0, remaining)
+      messages.push(sanitized)
+      remaining -= sanitized.length
+    }
   }
   return messages.reverse()
+}
+
+/** 从 ask_user_question 的 tool/call 参数（未解析的 JSON 字符串）提取问题文本。 */
+function askUserQuestionsText(rawArguments: string): string {
+  let parsed: unknown
+  try { parsed = JSON.parse(rawArguments) } catch { return '' }
+  if (typeof parsed !== 'object' || parsed === null) return ''
+  const questions = (parsed as Record<string, unknown>).questions
+  if (!Array.isArray(questions)) return ''
+  const parts: string[] = []
+  for (const question of questions) {
+    if (typeof question !== 'object' || question === null) continue
+    const item = question as Record<string, unknown>
+    const title = typeof item.question === 'string' ? item.question.trim() : ''
+    const header = typeof item.header === 'string' ? item.header.trim() : ''
+    const options = Array.isArray(item.options)
+      ? item.options
+          .filter((option): option is Record<string, unknown> => typeof option === 'object' && option !== null)
+          .map(option => (typeof option.label === 'string' ? option.label : ''))
+          .filter(label => label !== '')
+      : []
+    if (title === '' && header === '' && options.length === 0) continue
+    let text = title
+    if (header !== '') text = header + (text === '' ? '' : ': ') + text
+    if (options.length > 0) text += ' (选项: ' + options.join('/') + ')'
+    parts.push(text)
+  }
+  return parts.join('；')
+}
+
+/** 从 ask_user_question 的 tool/result 消息提取回答文本（答案以 compact JSON 文本呈现）。 */
+function askUserAnswerText(message: unknown): string {
+  if (typeof message !== 'object' || message === null) return ''
+  const outerBlocks = (message as Record<string, unknown>).content
+  if (!Array.isArray(outerBlocks)) return ''
+  for (const outer of outerBlocks) {
+    if (typeof outer !== 'object' || outer === null) continue
+    const blocks = (outer as Record<string, unknown>).content
+    if (!Array.isArray(blocks)) continue
+    for (const block of blocks) {
+      if (typeof block !== 'object' || block === null) continue
+      const entry = block as Record<string, unknown>
+      if (entry.type !== 'text' || typeof entry.text !== 'string') continue
+      let parsed: unknown
+      try { parsed = JSON.parse(entry.text) } catch { continue }
+      if (typeof parsed !== 'object' || parsed === null) continue
+      const answers = (parsed as Record<string, unknown>).answers
+      if (!Array.isArray(answers)) continue
+      const text = formatAskUserAnswers(answers)
+      if (text !== '') return text
+    }
+  }
+  return ''
+}
+
+/** 把 ask_user_question 的回答列表格式化为可读文本。 */
+function formatAskUserAnswers(answers: unknown[]): string {
+  const parts: string[] = []
+  for (const answer of answers) {
+    if (typeof answer !== 'object' || answer === null) continue
+    const item = answer as Record<string, unknown>
+    const id = typeof item.id === 'string' ? item.id : ''
+    const selected = Array.isArray(item.selected)
+      ? item.selected.filter((value): value is string => typeof value === 'string')
+      : []
+    const custom = typeof item.custom === 'string' ? item.custom.trim() : ''
+    const pieces: string[] = []
+    if (selected.length > 0) pieces.push(selected.join(', '))
+    if (custom !== '') pieces.push('custom: ' + custom)
+    if (pieces.length === 0) continue
+    parts.push(id === '' ? pieces.join('；') : id + ': ' + pieces.join('；'))
+  }
+  return parts.join(' | ')
 }
 
 /** 安装自动权限策略到官方工具流水线。 */
