@@ -1,0 +1,27 @@
+- id: permission
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      auto-ask:
+        sandbox: workspace-write
+        approval: ask
+        name: Auto Ask
+        description: 半自动审批：保留 workspace-write 沙箱，确定性规则放行/拒绝，模糊操作由 LLM 裁决，危险操作转人工兜底弹窗。
+      auto:
+        sandbox: workspace-write
+        approval: ask
+        name: Auto
+        description: 全自动审批：保留 workspace-write 沙箱，确定性规则放行/拒绝，模糊操作全部由 LLM 裁决，拒绝即拒绝、不再人工弹窗兜底。
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+
+- insert:
+    - id: autogate
+      name: dsh-autogate
+      config: {}
