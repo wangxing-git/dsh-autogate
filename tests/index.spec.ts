@@ -780,6 +780,17 @@ describe('设置卡 RPC 端点（settings.get / settings.write）', () => {
     ])
   })
 
+  it('settings.write → showTrail 在白名单内可写', async () => {
+    const { ctx, rpcHandlers, mountSettings, mutations } = createSettingsRpcContext()
+    apply(ctx)
+    mountSettings()
+    const handler = rpcHandlers.get('/autogate')!
+    const result = await handler('settings.write', { set: { showTrail: false }, unset: [] }, undefined as any)
+    expect(result.ok).toBe(true)
+    expect(mutations).toHaveLength(1)
+    expect(mutations[0].ops).toEqual([{ op: 'set', path: ['showTrail'], value: false }])
+  })
+
   it('settings.write → 白名单外字段被拒（invalid）', async () => {
     const { ctx, rpcHandlers, mountSettings, mutations } = createSettingsRpcContext()
     apply(ctx)

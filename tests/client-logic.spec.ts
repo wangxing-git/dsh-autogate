@@ -186,29 +186,76 @@ describe('RpcSettingsSource RPC 数据源', () => {
   })
 })
 
-describe('TrailController RPC 拉取', () => {
+describe('TrailController RPC 拉取（受 showTrail 控制）', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
-  it('拉取成功更新 store', async () => {
+  /** 最小 settings 数据源 mock：只暴露 TrailController 依赖的 getSnapshot/subscribe。 */
+  function fakeSettings(showTrail: boolean) {
+    let value: Record<string, unknown> = { showTrail }
+    const listeners = new Set<() => void>()
+    return {
+      getSnapshot: () => ({ value }),
+      subscribe: (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb) },
+      setShowTrail: (v: boolean) => { value = { showTrail: v }; for (const l of [...listeners]) l() },
+    }
+  }
+
+  it('默认显示 → 启用轮询并拉取更新 records', async () => {
     const records = [{ seq: 0, decision: 'allow' }]
-    const controller = new TrailController({ call: async () => ({ ok: true, value: records }) })
+    const settings = fakeSettings(true)
+    const controller = new TrailController({ call: async () => ({ ok: true, value: records }) }, settings as any)
     await controller.refresh()
-    expect(controller.store.getSnapshot()).toEqual(records)
+    expect(controller.store.getSnapshot()).toEqual({ enabled: true, records })
+    controller.dispose()
+  })
+
+  it('showTrail=false → 不轮询（不调用 RPC）且 enabled=false', () => {
+    const settings = fakeSettings(false)
+    const call = vi.fn(async () => ({ ok: true, value: [] }))
+    const controller = new TrailController({ call }, settings as any)
+    expect(controller.store.getSnapshot()).toEqual({ enabled: false, records: [] })
+    expect(call).not.toHaveBeenCalled()
+    controller.dispose()
+  })
+
+  it('showTrail true → false → 清空记录并停止轮询', async () => {
+    const records = [{ seq: 0, decision: 'allow' }]
+    const settings = fakeSettings(true)
+    const controller = new TrailController({ call: async () => ({ ok: true, value: records }) }, settings as any)
+    await controller.refresh()
+    expect(controller.store.getSnapshot()).toEqual({ enabled: true, records })
+    settings.setShowTrail(false)
+    expect(controller.store.getSnapshot()).toEqual({ enabled: false, records: [] })
+    controller.dispose()
+  })
+
+  it('showTrail false → true → 恢复轮询', async () => {
+    const records = [{ seq: 0, decision: 'allow' }]
+    const settings = fakeSettings(false)
+    const call = vi.fn(async () => ({ ok: true, value: records }))
+    const controller = new TrailController({ call }, settings as any)
+    expect(call).not.toHaveBeenCalled()
+    settings.setShowTrail(true)
+    await controller.refresh()
+    expect(controller.store.getSnapshot().enabled).toBe(true)
+    expect(controller.store.getSnapshot().records).toEqual(records)
     controller.dispose()
   })
 
   it('拉取失败保持上一份快照', async () => {
-    const controller = new TrailController({ call: async () => { throw new Error('rpc down') } })
+    const settings = fakeSettings(true)
+    const controller = new TrailController({ call: async () => { throw new Error('rpc down') } }, settings as any)
     await controller.refresh()
-    expect(controller.store.getSnapshot()).toEqual([])
+    expect(controller.store.getSnapshot()).toEqual({ enabled: true, records: [] })
     controller.dispose()
   })
 
   it('非 ok / 非数组结果不更新', async () => {
-    const controller = new TrailController({ call: async () => ({ ok: false, error: {} }) })
+    const settings = fakeSettings(true)
+    const controller = new TrailController({ call: async () => ({ ok: false, error: {} }) }, settings as any)
     await controller.refresh()
-    expect(controller.store.getSnapshot()).toEqual([])
+    expect(controller.store.getSnapshot()).toEqual({ enabled: true, records: [] })
     controller.dispose()
   })
 })

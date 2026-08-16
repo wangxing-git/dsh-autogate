@@ -54,11 +54,12 @@ Configuration is wired through the DSH settings service (`ctx.settings`): write 
 
     autogate:
       preflight: false                 # pre-sandbox interception switch: true runs deterministic rules + LLM classification, false (default) relies entirely on the sandbox
+      showTrail: true                  # approval trail overlay switch: false hides the bottom-right panel and stops polling the trail RPC (default true)
       presetName: auto-ask             # semi-auto preset key (default auto-ask): delegates to a human fallback popup after LLM deny
       fullAutoPresetName: auto         # full-auto preset key (default auto): LLM decision is final, no human popup
       classifierTimeoutMs: 8000        # classifier timeout (100–60000ms), fail-closed on timeout
       classifierMaxOutputTokens: 1024  # classifier max output tokens (64–4096)
-      classifierRetry: false           # retry once on classifier output parse failure (default false)
+      classifierRetry: true            # retry once on classifier output parse failure (default true)
       # classifierPrompt: |              # review (classification) system prompt; empty uses the built-in default
       #   (custom review prompt judging intent / type / reversibility / impact)
       # Fixed classifier model (defaults to the current session's provider/model; both fields must be set together)
@@ -95,6 +96,7 @@ While the plugin is active, a floating **Approval trail** toggle appears in the 
 - Expanding an entry reveals the one-line operation summary, the deny/allow reason, the tool `callId`, the local time, and the decision duration.
 - The **Locate (定位)** button scrolls the session view to the corresponding tool call.
 - Data is polled from the plugin's `trail` RPC every 2 seconds (the last snapshot is kept on failure).
+- The overlay can be disabled with `showTrail: false` (or in the settings card): the panel is hidden and the client stops polling the `trail` RPC entirely; the trail itself keeps recording server-side.
 - The trail is process-level and in-memory only: it resets when dsh restarts and is never persisted.
 - The deny/allow reason follows the DSH setting language (zh/en): it is English when `en` is explicitly set, otherwise (including when unset) it falls back to Simplified Chinese, matching the UI language.
 

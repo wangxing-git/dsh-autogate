@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
-import { apply } from '../src/index.js'
+import { apply, Config } from '../src/index.js'
 
 type ApprovalListener = (req: any, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>
 
@@ -146,5 +146,19 @@ describe('apply 接入 DSH settings（installSettingsSection）', () => {
     apply(ctx)
     const answerer = listeners.get('approval/request')![0]
     expect(await answerer(escalationReq(), nextRejected)).toBe('allowed-once')
+  })
+})
+
+describe('Config schema 默认值', () => {
+  it('classifierRetry 默认开启（true）', () => {
+    expect(Config({}).classifierRetry).toBe(true)
+  })
+
+  it('showTrail 默认显示（true）', () => {
+    expect(Config({}).showTrail).toBe(true)
+  })
+
+  it('preflight 默认关闭（false）', () => {
+    expect(Config({}).preflight).toBe(false)
   })
 })

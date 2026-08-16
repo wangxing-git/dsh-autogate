@@ -36,6 +36,7 @@ interface TrailRpcHost {
 /** 设置卡可编辑的 Config 字段白名单：settings.write 仅允许写这些键，其余字段须手改 settings.yaml。 */
 const SETTINGS_EDITABLE_FIELDS: readonly string[] = [
   'preflight',
+  'showTrail',
   'presetName',
   'fullAutoPresetName',
   'classifierProvider',
@@ -77,10 +78,12 @@ export interface Config {
   readonly classifierApiKeyEnv?: string
   readonly classifierTimeoutMs?: number
   readonly classifierMaxOutputTokens?: number
-  /** 分类器输出解析失败时静默重试一次；默认关闭（temperature 0 下偶发格式抖动）。 */
+  /** 分类器输出解析失败时静默重试一次；默认开启（temperature 0 下偶发格式抖动）。 */
   readonly classifierRetry?: boolean
   /** 沙盒前拦截判断开关：true 执行普通 L0 规则 + LLM 分类，false 完全依赖沙盒（硬 deny 与提权审批不受影响）。 */
   readonly preflight?: boolean
+  /** 审批轨迹浮窗开关（默认显示）：关闭则不显示右下角浮窗，且客户端停止轮询轨迹接口。 */
+  readonly showTrail?: boolean
   /** 全自动权限预设键（默认 auto）：该预设下审批不再人工弹窗，LLM 裁决为最终决定。 */
   readonly fullAutoPresetName?: string
 }
@@ -97,8 +100,9 @@ export const Config: z<Config> = z.object({
   classifierApiKeyEnv: z.string().default('DEEPSEEK_API_KEY').pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).description('HTTP 分类端点 API Key 的环境变量名'),
   classifierTimeoutMs: z.number().default(8_000).min(100).max(60_000).description('分类器超时毫秒数，超时 fail-closed'),
   classifierMaxOutputTokens: z.number().default(1_024).min(64).max(4_096).description('分类器输出 token 上限'),
-  classifierRetry: z.boolean().default(false).description('分类器输出解析失败时静默重试一次；默认关闭'),
+  classifierRetry: z.boolean().default(true).description('分类器输出解析失败时静默重试一次；默认开启'),
   preflight: z.boolean().default(false).description('沙盒前拦截判断开关：开启执行确定性规则与 LLM 分类，关闭则完全依赖沙盒策略（硬 deny 与提权审批不受影响）'),
+  showTrail: z.boolean().default(true).description('审批轨迹浮窗开关：默认显示；关闭则不显示浮窗且客户端停止轮询轨迹接口'),
   fullAutoPresetName: z.string().default(AUTO_PERMISSION_PRESET).description('全自动权限预设键（默认 auto）：该预设下审批不再人工弹窗，LLM 裁决为最终决定'),
 })
 
@@ -216,7 +220,7 @@ function classifierFrom(ctx: Context, config: Config, locale: () => UiLocale | u
       locale,
       ...(config.classifierProvider === undefined ? {} : { provider: config.classifierProvider }),
       ...(config.classifierModel === undefined ? {} : { model: config.classifierModel }),
-      ...(config.classifierRetry === undefined ? {} : { retryOnFailure: config.classifierRetry }),
+      retryOnFailure: config.classifierRetry ?? true,
     })
   }
   const endpoint = new URL(config.classifierEndpoint)
@@ -234,7 +238,7 @@ function classifierFrom(ctx: Context, config: Config, locale: () => UiLocale | u
     locale,
     ...(apiKey === undefined || apiKey === '' ? {} : { apiKey }),
     timeoutMs,
-    ...(config.classifierRetry === undefined ? {} : { retryOnFailure: config.classifierRetry }),
+    retryOnFailure: config.classifierRetry ?? true,
   })
 }
 

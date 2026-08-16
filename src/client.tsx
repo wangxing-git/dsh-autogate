@@ -69,8 +69,8 @@ class SafeAutoCardController {
   form: CardForm
   store: any
 
-  constructor(rpc: any) {
-    this.form = new CardForm(new RpcSettingsSource(rpc), [
+  constructor(settingsSource: RpcSettingsSource) {
+    this.form = new CardForm(settingsSource, [
       textField('presetName'),
       textField('fullAutoPresetName'),
       textField('classifierProvider'),
@@ -81,6 +81,7 @@ class SafeAutoCardController {
       numberField('classifierMaxOutputTokens'),
       boolField('classifierRetry'),
       boolField('preflight'),
+      boolField('showTrail'),
     ])
     this.store = this.form.bind(() => this.projection())
   }
@@ -98,6 +99,7 @@ class SafeAutoCardController {
       classifierMaxOutputTokens: this.form.field('classifierMaxOutputTokens'),
       classifierRetry: this.form.field('classifierRetry'),
       preflight: this.form.field('preflight'),
+      showTrail: this.form.field('showTrail'),
     }
   }
 
@@ -180,6 +182,7 @@ function SafeAutoCard(props: any) {
     { key: 'classifierTimeoutMs', label: t('classifierTimeoutMs'), hint: t('classifierTimeoutMsHint') },
     { key: 'classifierMaxOutputTokens', label: t('classifierMaxOutputTokens'), hint: t('classifierMaxOutputTokensHint') },
     { key: 'classifierRetry', label: t('classifierRetry'), hint: t('classifierRetryHint'), bool: true },
+    { key: 'showTrail', label: t('showTrail'), hint: t('showTrailHint'), bool: true },
   ]
   return jsxs('li', {
     className: 'sa_card',
@@ -282,8 +285,10 @@ function TrailItem(props: any) {
 function TrailPanel(props: any) {
   const [open, setOpen] = useState(false)
   const { t, useTrail } = props
-  const trail = useTrail((snapshot: any) => snapshot) ?? []
-  const records = Array.isArray(trail) ? trail : []
+  const snapshot = useTrail((s: any) => s) ?? {}
+  // showTrail 关闭时不再渲染浮窗（TrailController 亦已停止轮询）。
+  if (snapshot.enabled === false) return null
+  const records = Array.isArray(snapshot.records) ? snapshot.records : []
   if (records.length === 0) return null
   const locate = (callId: string) => {
     const el = Array.from(document.querySelectorAll('[data-chat-call-id]')).find((node) => node.getAttribute('data-chat-call-id') === callId)
@@ -320,7 +325,11 @@ function apply(ctx: any) {
   injectCss()
   ctx.effect(() => ctx.locale.register(SETTINGS_NS, { zh, en }), 'autogate: card dictionaries')
   const t = ctx.locale.bind(SETTINGS_NS)
-  const controller = new SafeAutoCardController(ctx.connection?.rpc)
+  const rpc = ctx.connection?.rpc
+  // 设置卡与轨迹浮窗共享同一个 settings 数据源：设置卡保存 showTrail 后，
+  // TrailController 经订阅即时启停轮询，无需重新拉取。
+  const settingsSource = new RpcSettingsSource(rpc)
+  const controller = new SafeAutoCardController(settingsSource)
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
     id: 'autogate',
@@ -329,7 +338,7 @@ function apply(ctx: any) {
     inject: () => controller.inject(),
   }, SafeAutoCard))
 
-  const trailController = new TrailController(ctx.connection?.rpc)
+  const trailController = new TrailController(rpc, settingsSource)
   ctx.effect(() => trailController.dispose, 'autogate: trail polling')
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',

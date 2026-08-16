@@ -183,28 +183,53 @@ export class RpcSettingsSource {
   }
 }
 
-// ==== 审批轨迹：RPC 拉取 + 轮询 ====
+// ==== 审批轨迹：RPC 拉取 + 轮询（受 showTrail 配置控制，关闭时不轮询） ====
 export class TrailController {
   store: any
   timer: any
   rpc: any
+  settings: RpcSettingsSource
+  records: any[] = []
+  enabled = true
+  private unsubscribe: (() => void) | undefined
 
-  constructor(rpc: any) {
+  constructor(rpc: any, settings: RpcSettingsSource) {
     this.rpc = rpc
-    this.store = createSnapshotStore([])
-    this.timer = setInterval(() => { void this.refresh() }, 2000)
-    void this.refresh()
+    this.settings = settings
+    this.store = createSnapshotStore({ enabled: true, records: [] })
+    // 订阅 settings 快照：showTrail 变化时动态启停轮询（设置卡保存后即时生效）。
+    this.unsubscribe = settings.subscribe(() => this.sync())
+    this.sync()
+  }
+
+  /** 依据 showTrail 配置启停轮询：关闭时清空记录并停止拉取，浮窗不再渲染。 */
+  sync() {
+    this.enabled = this.settings.getSnapshot().value?.showTrail !== false
+    if (this.enabled && this.timer === undefined) {
+      this.timer = setInterval(() => { void this.refresh() }, 2000)
+      void this.refresh()
+    } else if (!this.enabled && this.timer !== undefined) {
+      clearInterval(this.timer)
+      this.timer = undefined
+      this.records = []
+    }
+    this.publish()
   }
 
   async refresh() {
     try {
       const result = await this.rpc.call('/autogate', 'trail', {})
       if (result !== null && typeof result === 'object' && result.ok === true && Array.isArray(result.value)) {
-        this.store.set(result.value)
+        this.records = result.value
+        this.publish()
       }
     } catch {
       // 拉取失败保持上一份快照
     }
+  }
+
+  private publish() {
+    this.store.set({ enabled: this.enabled, records: this.records })
   }
 
   inject() {
@@ -212,7 +237,8 @@ export class TrailController {
   }
 
   dispose = () => {
-    clearInterval(this.timer)
+    if (this.timer !== undefined) clearInterval(this.timer)
+    this.unsubscribe?.()
   }
 }
 
@@ -245,6 +271,8 @@ export const zh = {
   invalid: '无效输入',
   preflight: '沙盒前拦截判断',
   preflightHint: '开启则在做沙盒前执行确定性规则与 LLM 分类；关闭（默认）则完全依赖沙盒策略，硬 deny 与提权审批不受影响',
+  showTrail: '审批轨迹浮窗',
+  showTrailHint: '右下角悬浮审批轨迹面板（默认显示）；关闭则不显示浮窗且停止轮询轨迹接口',
   presetName: '半自动权限预设键',
   presetNameHint: '半自动模式预设键（默认 auto-ask）：LLM 拒绝后转人工兜底弹窗',
   fullAutoPresetName: '全自动权限预设键',
@@ -262,7 +290,7 @@ export const zh = {
   classifierMaxOutputTokens: '输出 token 上限',
   classifierMaxOutputTokensHint: '64–4096',
   classifierRetry: '解析失败重试',
-  classifierRetryHint: '分类器输出解析失败时静默重试一次（默认关闭）',
+  classifierRetryHint: '分类器输出解析失败时静默重试一次（默认开启）',
   // 审批轨迹面板
   trailTitle: '审批轨迹',
   trailCollapse: '收起',
@@ -290,6 +318,8 @@ export const en = {
   invalid: 'Invalid',
   preflight: 'Pre-sandbox interception',
   preflightHint: 'When enabled, run deterministic rules and LLM classification before the sandbox; disabled (default) relies entirely on the sandbox — hard deny and escalation approval are unaffected',
+  showTrail: 'Approval trail overlay',
+  showTrailHint: 'Floating approval trail panel in the bottom-right (default on); off hides it and stops polling the trail RPC',
   presetName: 'Semi-auto permission preset',
   presetNameHint: 'Semi-auto preset key (default auto-ask): LLM denials fall back to a human prompt',
   fullAutoPresetName: 'Full-auto permission preset',
@@ -307,7 +337,7 @@ export const en = {
   classifierMaxOutputTokens: 'Max output tokens',
   classifierMaxOutputTokensHint: '64–4096',
   classifierRetry: 'Retry on parse failure',
-  classifierRetryHint: 'Retry once when classifier output fails to parse (default off)',
+  classifierRetryHint: 'Retry once when classifier output fails to parse (default on)',
   // 审批轨迹面板
   trailTitle: 'Approval trail',
   trailCollapse: 'Collapse',

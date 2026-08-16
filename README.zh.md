@@ -54,11 +54,12 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 
     autogate:
       preflight: false                 # 沙盒前拦截判断开关：true 执行确定性规则+LLM 分类，false（默认）完全依赖沙盒
+      showTrail: true                  # 审批轨迹浮窗开关：false 隐藏右下角浮窗并停止轮询轨迹接口（默认显示）
       presetName: auto-ask             # 半自动模式预设键（默认 auto-ask）：LLM 拒绝后转人工兜底弹窗
       fullAutoPresetName: auto         # 全自动模式预设键（默认 auto）：LLM 裁决为最终决定，不再人工弹窗
       classifierTimeoutMs: 8000        # 分类器超时（100–60000ms），超时 fail-closed
       classifierMaxOutputTokens: 1024  # 分类器输出上限（64–4096）
-      classifierRetry: false           # 分类器输出解析失败时静默重试一次（默认关闭）
+      classifierRetry: true            # 分类器输出解析失败时静默重试一次（默认开启）
       # classifierPrompt: |              # 审查（分类）系统提示词，留空用内置默认
       #   （自定义审查提示词，按目标/类型/可逆性/影响判断）
       # 固定分类模型（默认复用当前会话的 provider/model；两字段须成对）
@@ -95,6 +96,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 - 展开单条记录可查看操作摘要、拒绝/放行理由、工具 `callId`、本地时间与决策耗时。
 - 「定位」按钮把会话视图滚动到对应的那次工具调用。
 - 数据每 2 秒从插件 `trail` RPC 轮询一次（拉取失败保留上一份快照）。
+- 浮窗可通过配置 `showTrail: false`（或设置卡）关闭：面板隐藏且客户端停止轮询 `trail` RPC；服务端轨迹照常记录。
 - 轨迹为进程级、仅内存保存：dsh 重启即清空，从不持久化。
 - 拒绝/放行理由跟随 DSH 设置语言（zh/en）：显式设置 `en` 时理由为英文，否则（含未显式设置）回退中文，与界面语言保持一致。
 
