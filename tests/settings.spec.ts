@@ -34,7 +34,7 @@ function createContext(settingsResolved?: () => Record<string, unknown>) {
     streamCalls.push(options)
     for (const chunk of allowChunks) yield chunk
   }
-  let injectCallback: ((sctx: any) => void) | undefined
+  const settingsCallbacks: ((sctx: any) => void)[] = []
   const registered: { ns: unknown; opts: any }[] = []
   const watchers: (() => void)[] = []
 
@@ -54,7 +54,7 @@ function createContext(settingsResolved?: () => Record<string, unknown>) {
     inject(deps: string[], cb: (sctx: any) => void) {
       if (deps.includes('settings')) {
         if (settingsResolved === undefined) return undefined
-        injectCallback = cb
+        settingsCallbacks.push(cb)
         return undefined
       }
       if (deps.includes('connection')) {
@@ -80,10 +80,16 @@ function createContext(settingsResolved?: () => Record<string, unknown>) {
           opts.validate?.(scope.get())
           return scope
         },
+        get(ns: unknown) {
+          // 模拟 locale 命名空间：未显式设置语言 → undefined 偏好（回退英文）。
+          if (String(ns) === 'locale') return { preference: undefined }
+          return undefined
+        },
       },
+      on() { return () => {} },
       effect() { return () => {} },
     }
-    injectCallback!(sctx)
+    for (const cb of settingsCallbacks) cb(sctx)
   }
 
   return { ctx, listeners, streamCalls, registered, watchers, triggerSettingsMount }

@@ -1,5 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CLASSIFIER_SYSTEM_PROMPT, createDshClassifier, createHttpClassifier, extractEscalationJustification, isEscalationApprovalReason, parseClassifierDecision, sanitizeClassifierArguments, sanitizeClassifierText } from '../src/classifier.js'
+import { CLASSIFIER_SYSTEM_PROMPT, createDshClassifier, createHttpClassifier, extractEscalationJustification, isEscalationApprovalReason, parseClassifierDecision, sanitizeClassifierArguments, sanitizeClassifierText, withLocaleDirective } from '../src/classifier.js'
+
+describe('withLocaleDirective', () => {
+  it('zh 追加中文 reason 指令', () => {
+    const prompt = withLocaleDirective('base prompt', 'zh')
+    expect(prompt.startsWith('base prompt')).toBe(true)
+    expect(prompt).toContain('Simplified Chinese')
+  })
+  it('en 与未设置保持原样', () => {
+    expect(withLocaleDirective('base prompt', 'en')).toBe('base prompt')
+    expect(withLocaleDirective('base prompt', undefined)).toBe('base prompt')
+  })
+})
 
 describe('parseClassifierDecision', () => {
   it('接受 allow', () => {

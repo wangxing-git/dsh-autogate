@@ -1,3 +1,4 @@
+import { type UiLocale } from './i18n.js';
 /** 真实路径解析器：把路径解析为真实落点（跟随符号链接）；测试可注入。 */
 export type RealPathResolver = (path: string) => string;
 /** 策略使用的根路径。 */
@@ -43,6 +44,6 @@ export declare function isSensitiveConfigFile(target: string, roots: PolicyRoots
 /** 是否为工作区内受保护的元数据路径（如 .git）或敏感配置文件。 */
 export declare function isProtectedProjectPath(target: string, roots: PolicyRoots): boolean;
 /** 确定性危险目标熔断：根/家目录/DSH_HOME/系统关键路径返回拒绝原因。 */
-export declare function hardDestructiveTargetReason(target: string, roots: PolicyRoots): string | undefined;
+export declare function hardDestructiveTargetReason(target: string, roots: PolicyRoots, locale?: UiLocale): string | undefined;
 /** 解析运行时根路径。 */
 export declare function resolveRoots(activeWorkspace: string | undefined, options?: RootOptions, resolveReal?: RealPathResolver): PolicyRoots;

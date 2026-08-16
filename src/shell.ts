@@ -1,6 +1,7 @@
 import { basename } from 'node:path'
 import { globStaticPrefix, hardDestructiveTargetReason, isWithin, normalizePath, type PolicyRoots } from './paths.js'
 import type { Assessment } from './types.js'
+import { reasonText, type UiLocale } from './i18n.js'
 
 export type ShellKind = 'bash' | 'pwsh'
 
@@ -38,13 +39,13 @@ const SENSITIVE_MARKER = /(?:\.ssh[\\/]|\.gnupg[\\/]|\.aws[\\/]|\.kube[\\/]|\.cr
 const NETWORK_COMMAND = /(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod)/i
 
 /** 确定性硬 deny：不依赖解析器，直接正则熔断。 */
-export function hardDenyShellReason(source: string, _shell: ShellKind, _roots: PolicyRoots): string | undefined {
+export function hardDenyShellReason(source: string, _shell: ShellKind, _roots: PolicyRoots, locale?: UiLocale): string | undefined {
   const compact = source.trim()
-  if (PRIVILEGE_ESCALATION.test(compact)) return 'privilege escalation is not permitted by auto mode'
-  if (SELF_DESTRUCTIVE.test(compact)) return 'self-destructive or system-level command is not permitted'
-  if (NETWORK_COMMAND.test(compact) && SENSITIVE_MARKER.test(compact)) return 'credential or private-data exfiltration pattern is not permitted'
-  if (/rm\s+(?:-[a-z]*[fr][a-z]*\s+)*\/(?:\s|$)/.test(compact)) return 'deleting the filesystem root is not permitted'
-  if (/(?:rm|Remove-Item)\s+(?:-[a-z]*[fr][a-z]*\s+)*(?:~|\$HOME|\$env:HOME)(?:\s|$)/i.test(compact)) return 'deleting the user home root is not permitted'
+  if (PRIVILEGE_ESCALATION.test(compact)) return reasonText(locale, 'auto 模式不允许提权', 'privilege escalation is not permitted by auto mode')
+  if (SELF_DESTRUCTIVE.test(compact)) return reasonText(locale, '不允许自毁或系统级命令', 'self-destructive or system-level command is not permitted')
+  if (NETWORK_COMMAND.test(compact) && SENSITIVE_MARKER.test(compact)) return reasonText(locale, '不允许凭据或私密数据外传', 'credential or private-data exfiltration pattern is not permitted')
+  if (/rm\s+(?:-[a-z]*[fr][a-z]*\s+)*\/(?:\s|$)/.test(compact)) return reasonText(locale, '不允许删除文件系统根', 'deleting the filesystem root is not permitted')
+  if (/(?:rm|Remove-Item)\s+(?:-[a-z]*[fr][a-z]*\s+)*(?:~|\$HOME|\$env:HOME)(?:\s|$)/i.test(compact)) return reasonText(locale, '不允许删除用户家目录', 'deleting the user home root is not permitted')
   return undefined
 }
 
@@ -135,32 +136,32 @@ function isBuildOrTest(name: string, tokens: string[]): boolean {
  * 删除 / 移动类命令：关键路径硬 deny；目标全部落在工作区/临时区内时跟随
  * workspace-write 沙箱直接放行；工作区外的删除直接放行交给沙箱拦截 + escalation。
  */
-function assessDestructive(name: string, tokens: string[], roots: PolicyRoots): Assessment {
+function assessDestructive(name: string, tokens: string[], roots: PolicyRoots, locale?: UiLocale): Assessment {
   const targets = tokens.slice(1).filter(token => !token.startsWith('-'))
   if (targets.some(token => /[\$\x60]/.test(token))) {
-    return classify('destructive target is dynamic and requires independent classification')
+    return classify(reasonText(locale, '破坏性目标动态，需独立分类', 'destructive target is dynamic and requires independent classification'))
   }
-  if (targets.length === 0) return allow('destructive target could not be determined; workspace-write sandbox applies')
+  if (targets.length === 0) return allow(reasonText(locale, '无法确定破坏性目标；workspace-write 沙箱适用', 'destructive target could not be determined; workspace-write sandbox applies'))
   for (const target of targets) {
     // glob 目标：先对其静态前缀做危险判定，防止 /*、/etc/*、~/*、~/.* 这类绕过精确路径匹配。
-    const reason = hardDestructiveTargetReason(globStaticPrefix(target), roots)
-    if (reason !== undefined) return deny('destructive operation targets ' + reason)
+    const reason = hardDestructiveTargetReason(globStaticPrefix(target), roots, locale)
+    if (reason !== undefined) return deny(reasonText(locale, '破坏性操作目标为 ', 'destructive operation targets ') + reason)
   }
   // dd 是块设备级操作，参数形如 if=/of=，静态路径判定不可靠，交 LLM 分类。
-  if (name === 'dd') return classify('dd block-device operation requires independent classification')
+  if (name === 'dd') return classify(reasonText(locale, 'dd 块设备操作需独立分类', 'dd block-device operation requires independent classification'))
   const confined = WORKSPACE_CONFINED_DESTRUCTIVE.has(name) && targets.every((target) => {
     const normalized = normalizePath(target, roots.workspace, roots.home)
     // symlink 加固：以真实落点判定，工作区内 symlink 逃逸到区外时不再按“区内删除”放行。
     const real = roots.resolveReal(normalized)
     return isWithin(roots.workspace, real) || roots.tempRoots.some(root => isWithin(root, real))
   })
-  if (confined) return allow('destructive operation confined to the workspace or temporary area; workspace-write sandbox applies')
-  return allow('destructive operation outside the workspace; workspace-write sandbox will block it and offer escalation')
+  if (confined) return allow(reasonText(locale, '破坏性操作限于工作区或临时区；workspace-write 沙箱适用', 'destructive operation confined to the workspace or temporary area; workspace-write sandbox applies'))
+  return allow(reasonText(locale, '工作区外的破坏性操作；workspace-write 沙箱将拦截并提供提权', 'destructive operation outside the workspace; workspace-write sandbox will block it and offer escalation'))
 }
 
 /** 主入口：先硬 deny，再按命令分类，复杂/动态结构一律 fail-closed。 */
-export function assessShell(source: string, shell: ShellKind, roots: PolicyRoots): Assessment {
-  const hard = hardDenyShellReason(source, shell, roots)
+export function assessShell(source: string, shell: ShellKind, roots: PolicyRoots, locale?: UiLocale): Assessment {
+  const hard = hardDenyShellReason(source, shell, roots, locale)
   if (hard !== undefined) return deny(hard)
 
   const compact = source.trim()
@@ -168,67 +169,67 @@ export function assessShell(source: string, shell: ShellKind, roots: PolicyRoots
   // 复杂 shell 结构：命令替换、here-doc、管道、重定向、复合、分组、进程替换。
   if (/\$\(|[\x60]|<<|&&|\|\||;|\||[<>]|\(|\)|\{|\}|\[\[/.test(compact)) {
     if (/\b(?:rm|rmdir|unlink|shred|dd|mkfs|remove-item)\b/.test(compact)) {
-      return classify('destructive compound shell command requires independent classification')
+      return classify(reasonText(locale, '破坏性复合 shell 命令需独立分类', 'destructive compound shell command requires independent classification'))
     }
-    return classify('compound shell command requires independent classification')
+    return classify(reasonText(locale, '复合 shell 命令需独立分类', 'compound shell command requires independent classification'))
   }
 
   const tokens = tokenize(compact)
   const rawName = tokens[0] ?? ''
-  if (rawName === '') return allow('command line contains no command')
-  if (/[\$\x60]/.test(rawName)) return allow('command name is produced by a dynamic expansion; workspace-write sandbox applies')
+  if (rawName === '') return allow(reasonText(locale, '命令行不含命令', 'command line contains no command'))
+  if (/[\$\x60]/.test(rawName)) return allow(reasonText(locale, '命令名由动态展开产生；workspace-write 沙箱适用', 'command name is produced by a dynamic expansion; workspace-write sandbox applies'))
   const name = commandName(rawName)
 
   // 提权/自毁命令：即使原始正则被引号拼接（如 s'u'do）绕过，tokenize 后仍能确定性拒绝。
-  if (PRIVILEGE_ESCALATION_COMMANDS.has(name)) return deny('privilege escalation is not permitted by auto mode')
-  if (SELF_DESTRUCTIVE_COMMANDS.has(name)) return deny('self-destructive or system-level command is not permitted')
+  if (PRIVILEGE_ESCALATION_COMMANDS.has(name)) return deny(reasonText(locale, 'auto 模式不允许提权', 'privilege escalation is not permitted by auto mode'))
+  if (SELF_DESTRUCTIVE_COMMANDS.has(name)) return deny(reasonText(locale, '不允许自毁或系统级命令', 'self-destructive or system-level command is not permitted'))
 
   if (isNestedInterpreter(name, tokens)) {
     if (/\b(?:rm|rmdir|unlink|shred|os\.(?:remove|unlink)|shutil\.rmtree|file\.delete)\b/.test(compact)) {
-      return classify('destructive nested interpreter code requires independent classification')
+      return classify(reasonText(locale, '破坏性嵌套解释器代码需独立分类', 'destructive nested interpreter code requires independent classification'))
     }
-    return classify('nested interpreter execution requires independent classification')
+    return classify(reasonText(locale, '嵌套解释器执行需独立分类', 'nested interpreter execution requires independent classification'))
   }
 
-  if (DESTRUCTIVE_COMMANDS.has(name)) return assessDestructive(name, tokens, roots)
+  if (DESTRUCTIVE_COMMANDS.has(name)) return assessDestructive(name, tokens, roots, locale)
 
   if (name === 'find') {
-    if (/-(?:delete|exec|execdir|ok|okdir)\b/.test(compact)) return classify('find with a mutating action requires independent classification')
+    if (/-(?:delete|exec|execdir|ok|okdir)\b/.test(compact)) return classify(reasonText(locale, '带变更动作的 find 需独立分类', 'find with a mutating action requires independent classification'))
     const paths = tokens.slice(1).filter(token => looksLikePath(token))
     return paths.length === 0 || routinePaths(paths, roots)
-      ? allow('read-only find inside the workspace or temporary area')
-      : classify('find references an external or protected path')
+      ? allow(reasonText(locale, '工作区或临时区内的只读 find', 'read-only find inside the workspace or temporary area'))
+      : classify(reasonText(locale, 'find 引用了外部或受保护路径', 'find references an external or protected path'))
   }
 
   const readOnly = shell === 'bash' ? BASH_READ_ONLY : PWSH_READ_ONLY
   if (readOnly.has(name)) {
     const paths = tokens.slice(1).filter(token => looksLikePath(token))
     return paths.length === 0 || routinePaths(paths, roots)
-      ? allow('static read-only command inside the workspace or temporary area')
-      : classify('read-only command references an external or protected path')
+      ? allow(reasonText(locale, '工作区或临时区内的静态只读命令', 'static read-only command inside the workspace or temporary area'))
+      : classify(reasonText(locale, '只读命令引用了外部或受保护路径', 'read-only command references an external or protected path'))
   }
 
   if (name === 'git') {
     const sub = tokens[1]?.toLowerCase()
-    if (['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'blame'].includes(sub)) return allow('read-only git inspection')
+    if (['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'blame'].includes(sub)) return allow(reasonText(locale, '只读 git 检查', 'read-only git inspection'))
     if (['reset', 'clean', 'commit', 'push', 'rebase', 'checkout', 'switch', 'branch', 'tag', 'merge'].includes(sub)) {
-      return classify('Git state-changing command requires independent classification')
+      return classify(reasonText(locale, 'git 状态变更命令需独立分类', 'Git state-changing command requires independent classification'))
     }
-    return classify('git command requires independent classification')
+    return classify(reasonText(locale, 'git 命令需独立分类', 'git command requires independent classification'))
   }
 
   if (tokens.length === 2 && ['--version', '-v', 'version'].includes(tokens[1]?.toLowerCase() ?? '')) {
-    return allow('development-tool version probe')
+    return allow(reasonText(locale, '开发工具版本探测', 'development-tool version probe'))
   }
 
-  if (isBuildOrTest(name, tokens)) return allow('recognized project build, test, or verification command')
+  if (isBuildOrTest(name, tokens)) return allow(reasonText(locale, '已识别的项目构建、测试或校验命令', 'recognized project build, test, or verification command'))
 
   if (['curl', 'wget', 'ssh', 'scp', 'rsync', 'ftp', 'nc', 'netcat'].includes(name)) {
-    return classify('network operation requires independent classification')
+    return classify(reasonText(locale, '网络操作需独立分类', 'network operation requires independent classification'))
   }
   if (['psql', 'mysql', 'mongosh', 'redis-cli', 'kubectl', 'terraform', 'ansible', 'systemctl', 'launchctl', 'createdb', 'dropdb'].includes(name)) {
-    return classify('database, service, or infrastructure operation requires independent classification')
+    return classify(reasonText(locale, '数据库、服务或基础设施操作需独立分类', 'database, service, or infrastructure operation requires independent classification'))
   }
 
-  return classify('unrecognized shell command requires independent classification: ' + name)
+  return classify(reasonText(locale, '未识别的 shell 命令需独立分类：', 'unrecognized shell command requires independent classification: ') + name)
 }

@@ -311,7 +311,7 @@ describe('preflight 开关（沙盒前拦截判断）', () => {
     const { ctx, guards } = createMockContext(allowChunks)
     apply(ctx as any)
     const exec = { name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-preflight-hd', agent: autoAgent(), signal: undefined }
-    expect(guards[0](exec as any)).toBe('privilege escalation is not permitted by auto mode')
+    expect(guards[0](exec as any)).toBe('auto 模式不允许提权')
   })
 })
 
@@ -547,5 +547,99 @@ describe('managedPermissionAuthority', () => {
   })
   it('无 agent 返回 undefined', () => {
     expect(managedPermissionAuthority(undefined as any, () => undefined)).toBeUndefined()
+  })
+})
+
+/** 构造 settings 就绪的 mock Context，用于验证服务端跟随 locale.preference 生成理由。 */
+function createLocaleContext() {
+  const listeners = new Map<string, any[]>()
+  const guards: ((exec: any) => string | undefined)[] = []
+  const streamCalls: any[] = []
+  const settingsCallbacks: ((sctx: any) => void)[] = []
+  const localeListeners: ((ns: unknown) => void)[] = []
+  let localeValue: { preference?: string } = { preference: 'zh' }
+  const stream = async function* (options: any) {
+    streamCalls.push(options)
+    yield { type: 'text-delta', index: 0, text: '{"decision":"allow","reason":"ok"}' }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  const ctx: any = {
+    fiber: { state: 0 },
+    on(event: string, listener: any) {
+      if (!listeners.has(event)) listeners.set(event, [])
+      listeners.get(event)!.push(listener)
+    },
+    tools: {
+      guard(cb: any) { guards.push(cb); return () => {} },
+      register() { return () => {} },
+    },
+    llm: { stream },
+    get() { return undefined },
+    logger: { warn() {} },
+    inject(deps: string[], cb: (sctx: any) => void) {
+      if (deps.includes('settings')) { settingsCallbacks.push(cb); return undefined }
+      if (deps.includes('connection')) { cb({ get: () => undefined, effect: () => () => {} }); return undefined }
+      return undefined
+    },
+    effect() { return () => {} },
+  }
+  const mountSettings = () => {
+    const sctx = {
+      settings: {
+        register(_ns: unknown, _schema: unknown, opts: any) {
+          opts.validate?.({})
+          const resolved = { ...(opts.base ?? {}) }
+          return { get: () => resolved, watch() { return () => {} }, update: async () => {}, replace: async () => {} }
+        },
+        get(ns: unknown) {
+          if (String(ns) === 'locale') return localeValue
+          return undefined
+        },
+      },
+      on(event: string, listener: any) {
+        if (event === 'settings/updated') localeListeners.push(listener)
+        return () => {}
+      },
+      effect() { return () => {} },
+    }
+    for (const cb of settingsCallbacks) cb(sctx)
+  }
+  return { ctx, guards, listeners, streamCalls, mountSettings, setLocale: (v: { preference?: string }) => { localeValue = v }, localeListeners }
+}
+
+describe('locale 语言跟随（服务端读 settings + L0/L1 理由本地化）', () => {
+  it('locale=zh → L0 硬 deny 理由为中文；切 en 后为英文', () => {
+    const { ctx, guards, mountSettings, setLocale, localeListeners } = createLocaleContext()
+    apply(ctx)
+    mountSettings()
+    const exec = { name: 'bash', arguments: { command: 'sudo rm -rf /' }, agent: autoAgent(), signal: new AbortController().signal }
+    expect(guards[0](exec)).toContain('不允许提权')
+    setLocale({ preference: 'en' })
+    localeListeners.forEach((fn) => fn('locale'))
+    expect(guards[0](exec)).toContain('privilege escalation')
+  })
+
+  it('preflight + locale=zh → 分类 system 提示词注入中文指令', async () => {
+    const { ctx, listeners, streamCalls, mountSettings } = createLocaleContext()
+    apply(ctx, { preflight: true })
+    mountSettings()
+    const preExecute = listeners.get('tools/pre-execute')![0]
+    const exec = { name: 'unrecognized_tool', arguments: { probe: true }, callId: 'c-locale', agent: autoAgent(), signal: new AbortController().signal }
+    const decision = await preExecute(exec, async () => ({ kind: 'allow' }))
+    expect(decision.kind).toBe('allow')
+    expect(streamCalls[0].system).toContain('Simplified Chinese')
+  })
+
+  it('未显式设置语言 → 服务端回退中文', () => {
+    const { ctx, guards, mountSettings, setLocale, localeListeners } = createLocaleContext()
+    setLocale({ preference: 'en' })
+    apply(ctx)
+    mountSettings()
+    const exec = { name: 'bash', arguments: { command: 'sudo rm -rf /' }, agent: autoAgent(), signal: new AbortController().signal }
+    expect(guards[0](exec)).toContain('privilege escalation')
+    // 清空语言偏好（未显式设置）→ 归一化回退中文
+    setLocale({})
+    localeListeners.forEach((fn) => fn('locale'))
+    expect(guards[0](exec)).toContain('不允许提权')
   })
 })

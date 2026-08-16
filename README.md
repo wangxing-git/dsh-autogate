@@ -93,6 +93,7 @@ While the plugin is active, a floating **Approval trail** toggle appears in the 
 - The **Locate (定位)** button scrolls the session view to the corresponding tool call.
 - Data is polled from the plugin's `trail` RPC every 2 seconds (the last snapshot is kept on failure).
 - The trail is process-level and in-memory only: it resets when dsh restarts and is never persisted.
+- The deny/allow reason follows the DSH setting language (zh/en): it is English when `en` is explicitly set, otherwise (including when unset) it falls back to Simplified Chinese, matching the UI language.
 
 ## Directory structure
 

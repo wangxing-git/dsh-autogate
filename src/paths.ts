@@ -1,6 +1,7 @@
 import { homedir, tmpdir } from 'node:os'
 import { realpathSync } from 'node:fs'
 import { posix, win32 } from 'node:path'
+import { reasonText, type UiLocale } from './i18n.js'
 
 /** 真实路径解析器：把路径解析为真实落点（跟随符号链接）；测试可注入。 */
 export type RealPathResolver = (path: string) => string
@@ -153,14 +154,14 @@ export function isProtectedProjectPath(target: string, roots: PolicyRoots): bool
 }
 
 /** 确定性危险目标熔断：根/家目录/DSH_HOME/系统关键路径返回拒绝原因。 */
-export function hardDestructiveTargetReason(target: string, roots: PolicyRoots): string | undefined {
+export function hardDestructiveTargetReason(target: string, roots: PolicyRoots, locale?: UiLocale): string | undefined {
   const normalized = normalizePath(target, roots.workspace, roots.home)
   // symlink 加固：解析真实落点，防止工作区内 symlink 逃逸到关键路径时被词法判定漏过。
   const real = roots.resolveReal(normalized)
-  if (isFilesystemRoot(real)) return `filesystem root ${real}`
-  if (real === roots.home) return `user home root ${real}`
-  if (isWithin(roots.dshHome, real)) return `DSH_HOME path ${real}`
-  if (isCriticalPath(real, roots)) return `system or credential-critical path ${real}`
+  if (isFilesystemRoot(real)) return reasonText(locale, `文件系统根 ${real}`, `filesystem root ${real}`)
+  if (real === roots.home) return reasonText(locale, `用户家目录 ${real}`, `user home root ${real}`)
+  if (isWithin(roots.dshHome, real)) return reasonText(locale, `DSH_HOME 路径 ${real}`, `DSH_HOME path ${real}`)
+  if (isCriticalPath(real, roots)) return reasonText(locale, `系统或凭据关键路径 ${real}`, `system or credential-critical path ${real}`)
   return undefined
 }
 

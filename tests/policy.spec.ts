@@ -157,6 +157,21 @@ describe('hardDenyReason 凭据外传与关键路径写', () => {
   })
 })
 
+describe('locale 中文理由', () => {
+  it('hardDenyReason zh：关键路径写返回中文', () => {
+    expect(hardDenyReason(execution('delete_file', { file_path: '/etc/passwd' }), roots, 'zh')).toContain('破坏性工具目标为')
+    expect(hardDenyReason(execution('write', { file_path: '~/.ssh/id_rsa', content: 'x' }), roots, 'zh')).toContain('变更目标为')
+  })
+  it('assessTool zh：读工作区外关键路径', () => {
+    const a = assessTool(execution('read', { file_path: '/etc/passwd' }), roots, 'zh')
+    expect(a.decision).toBe('ask')
+    expect(a.reason).toContain('读取工作区外关键路径')
+  })
+  it('assessTool zh：bash 缺参数返回中文兜底', () => {
+    expect(assessTool(execution('bash', {}), roots, 'zh').reason).toContain('命令参数缺失或无效')
+  })
+})
+
 describe('hasSandboxEscalation', () => {
   it('识别非空 sandbox_permissions', () => {
     expect(hasSandboxEscalation({ sandbox_permissions: 'danger-full-access' })).toBe(true)

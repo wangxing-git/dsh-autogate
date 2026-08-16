@@ -10,6 +10,7 @@ import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { SafetyClassifier } from './types.js'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { createApprovalTrail, type ApprovalDecision, type ApprovalLayer } from './trail.js'
+import type { UiLocale } from './i18n.js'
 
 export * from './paths.js'
 export * from './policy.js'
@@ -172,7 +173,7 @@ function validateConfig(config: Config): void {
   }
 }
 
-function classifierFrom(ctx: Context, config: Config): SafetyClassifier {
+function classifierFrom(ctx: Context, config: Config, locale: () => UiLocale | undefined): SafetyClassifier {
   const timeoutMs = config.classifierTimeoutMs ?? 8_000
   const systemPrompt = config.classifierPrompt === undefined || config.classifierPrompt.trim() === '' ? undefined : config.classifierPrompt
   if (!Number.isFinite(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) {
@@ -187,6 +188,7 @@ function classifierFrom(ctx: Context, config: Config): SafetyClassifier {
       timeoutMs,
       maxOutputTokens,
       systemPrompt,
+      locale,
       ...(config.classifierProvider === undefined ? {} : { provider: config.classifierProvider }),
       ...(config.classifierModel === undefined ? {} : { model: config.classifierModel }),
     })
@@ -203,6 +205,7 @@ function classifierFrom(ctx: Context, config: Config): SafetyClassifier {
     endpoint: endpoint.href,
     model: config.classifierModel ?? 'deepseek-chat',
     systemPrompt,
+    locale,
     ...(apiKey === undefined || apiKey === '' ? {} : { apiKey }),
     timeoutMs,
   })
@@ -342,9 +345,12 @@ function formatAskUserAnswers(answers: unknown[]): string {
 /** 安装自动权限策略到官方工具流水线。 */
 export function apply(ctx: Context, config: Config = {}): void {
   const entry = config
+  // 当前 UI 语言：跟随 DSH 设置语言（locale.preference）；未显式设置时回退中文，
+  // 与客户端浏览器语言 fallback（中文优先）保持一致。
+  let uiLocale: UiLocale = 'zh'
   let presetName = entry.presetName ?? SEMI_AUTO_PERMISSION_PRESET
   let fullAutoPresetName = entry.fullAutoPresetName ?? AUTO_PERMISSION_PRESET
-  let classifier = classifierFrom(ctx, entry)
+  let classifier = classifierFrom(ctx, entry, () => uiLocale)
   let rootOptions = rootOptionsFrom(entry)
   let preflight = entry.preflight ?? false
 
@@ -355,7 +361,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       const cfg = source()
       presetName = cfg.presetName ?? SEMI_AUTO_PERMISSION_PRESET
       fullAutoPresetName = cfg.fullAutoPresetName ?? AUTO_PERMISSION_PRESET
-      classifier = classifierFrom(ctx, cfg)
+      classifier = classifierFrom(ctx, cfg, () => uiLocale)
       rootOptions = rootOptionsFrom(cfg)
       preflight = cfg.preflight ?? false
       built = true
@@ -372,6 +378,23 @@ export function apply(ctx: Context, config: Config = {}): void {
     validate: validateConfig,
   })
   rebuild()
+
+  // 跟随 DSH 设置语言：locale.preference（'zh'|'en'）由 dsh-client-locale 持久化在同一个
+  // settings 文档里，服务端直接读取即可；据此让 L0 理由与 L1 分类 reason 使用对应语言。
+  ctx.inject(['settings'], (sctx) => {
+    const localeNs = settingsNamespace('locale')
+    const readLocale = (): void => {
+      const value = sctx.settings.get(localeNs) as { preference?: UiLocale } | undefined
+      // 未显式设置（preference 缺失）时回退中文，与客户端浏览器语言 fallback 一致。
+      uiLocale = value?.preference ?? 'zh'
+    }
+    readLocale()
+    sctx.on('settings/updated', (ns: unknown) => {
+      if (ns === localeNs) readLocale()
+    })
+    // settings 服务卸载时回退中文（未显式设置语言时的默认行为）。
+    sctx.effect(() => () => { uiLocale = 'zh' })
+  })
 
   // 审批轨迹：进程级环形缓冲，记录每次 Auto 决策供客户端面板拉取展示。
   const trail = createApprovalTrail()
@@ -397,7 +420,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const isAutoExecution = (exec: Readonly<ToolExecution>) => authorityFor(exec) !== undefined
 
   // 同步硬 deny：单调 guard，后续监听器/分类器无法覆盖。
-  ctx.tools.guard(exec => isAutoExecution(exec) ? hardDenyReason(exec, rootsFor(exec)) : undefined)
+  ctx.tools.guard(exec => isAutoExecution(exec) ? hardDenyReason(exec, rootsFor(exec), uiLocale) : undefined)
 
   // 异步判定：allow 放行 / deny 拒绝 / 无法静态分类转人工或交 LLM 两态裁决。
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
@@ -428,7 +451,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (!preflight) return next()
 
     const roots = rootsFor(exec)
-    const assessment = assessTool(exec, roots)
+    const assessment = assessTool(exec, roots, uiLocale)
     if (assessment.decision === 'deny') {
       recordTrail(exec, 'deny', 'L0', assessment.reason, Date.now() - startedAt)
       return { kind: 'deny', reason: '[autogate hard deny] ' + assessment.reason }

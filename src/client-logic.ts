@@ -202,6 +202,17 @@ export const zh = {
   classifierTimeoutMsHint: '100–60000，超时 fail-closed',
   classifierMaxOutputTokens: '输出 token 上限',
   classifierMaxOutputTokensHint: '64–4096',
+  // 审批轨迹面板
+  trailTitle: '审批轨迹',
+  trailCollapse: '收起',
+  locate: '定位',
+  summaryLabel: '操作',
+  reasonLabel: '理由',
+  timeLabel: '时间',
+  durationLabel: '耗时',
+  decisionAllow: '放行',
+  decisionDeny: '拒绝',
+  decisionAsk: '转人工',
 }
 
 export const en = {
@@ -234,4 +245,15 @@ export const en = {
   classifierTimeoutMsHint: '100–60000, fail-closed on timeout',
   classifierMaxOutputTokens: 'Max output tokens',
   classifierMaxOutputTokensHint: '64–4096',
+  // 审批轨迹面板
+  trailTitle: 'Approval trail',
+  trailCollapse: 'Collapse',
+  locate: 'Locate',
+  summaryLabel: 'Action',
+  reasonLabel: 'Reason',
+  timeLabel: 'Time',
+  durationLabel: 'Duration',
+  decisionAllow: 'Allow',
+  decisionDeny: 'Deny',
+  decisionAsk: 'Ask',
 }

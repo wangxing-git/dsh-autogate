@@ -43,6 +43,12 @@ describe('hardDestructiveTargetReason', () => {
   it('放行工作区路径', () => {
     expect(hardDestructiveTargetReason('/ws/build', roots)).toBeUndefined()
   })
+  it('zh 语言返回中文理由', () => {
+    expect(hardDestructiveTargetReason('/', roots, 'zh')).toContain('文件系统根')
+    expect(hardDestructiveTargetReason('~', roots, 'zh')).toContain('用户家目录')
+    expect(hardDestructiveTargetReason('/home/u/.dsh/settings.yaml', roots, 'zh')).toContain('DSH_HOME 路径')
+    expect(hardDestructiveTargetReason('~/.ssh/id_rsa', roots, 'zh')).toContain('凭据关键路径')
+  })
 })
 
 describe('isSensitiveConfigFile', () => {

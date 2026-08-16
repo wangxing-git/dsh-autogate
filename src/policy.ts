@@ -2,6 +2,7 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { hardDestructiveTargetReason, isCriticalPath, isProtectedProjectPath, isSensitiveConfigFile, isWithin, normalizePath, type PolicyRoots } from './paths.js'
 import { assessShell, hardDenyShellReason } from './shell.js'
 import type { Assessment } from './types.js'
+import { reasonText, type UiLocale } from './i18n.js'
 
 function allow(reason: string): Assessment {
   return { decision: 'allow', reason }
@@ -70,27 +71,27 @@ function containsCredentialMaterial(argumentsValue: unknown): boolean {
 }
 
 /** 同步硬 deny：供 ctx.tools.guard() 与 pre-execute 共用，后续监听器无法覆盖。 */
-export function hardDenyReason(exec: Readonly<ToolExecution>, roots: PolicyRoots): string | undefined {
+export function hardDenyReason(exec: Readonly<ToolExecution>, roots: PolicyRoots, locale?: UiLocale): string | undefined {
   const name = exec.name
   const args = record(exec.arguments)
   if ((name === 'bash' || name === 'pwsh') && typeof args?.command === 'string') {
-    return hardDenyShellReason(args.command, name, roots)
+    return hardDenyShellReason(args.command, name, roots, locale)
   }
   if ((/^(?:web_fetch|web_search|curl|wget)/i.test(name) || EXTERNAL_WRITE_TOOLS.has(name)) && containsCredentialMaterial(exec.arguments)) {
-    return 'external call contains credential or private-key material'
+    return reasonText(locale, '外部调用包含凭据或私钥材料', 'external call contains credential or private-key material')
   }
   if (['write', 'edit', 'apply_patch'].includes(name)) {
     const path = pathArgument(args)
     if (path !== undefined) {
-      const reason = hardDestructiveTargetReason(path, roots)
-      if (reason !== undefined) return 'mutation targets ' + reason
+      const reason = hardDestructiveTargetReason(path, roots, locale)
+      if (reason !== undefined) return reasonText(locale, '变更目标为 ', 'mutation targets ') + reason
     }
   }
   if (DESTRUCTIVE_TOOL_NAME.test(name)) {
     const path = pathArgument(args)
     if (path !== undefined) {
-      const reason = hardDestructiveTargetReason(path, roots)
-      if (reason !== undefined) return 'destructive tool targets ' + reason
+      const reason = hardDestructiveTargetReason(path, roots, locale)
+      if (reason !== undefined) return reasonText(locale, '破坏性工具目标为 ', 'destructive tool targets ') + reason
     }
   }
   return undefined
@@ -102,69 +103,69 @@ export function hardDenyReason(exec: Readonly<ToolExecution>, roots: PolicyRoots
  * - deny：硬危险（关键路径、凭据外传、提权）；
  * - ask：模糊 / 语义危险操作交 LLM 两态裁决。
  */
-export function assessTool(exec: Readonly<ToolExecution>, roots: PolicyRoots): Assessment {
-  const hard = hardDenyReason(exec, roots)
+export function assessTool(exec: Readonly<ToolExecution>, roots: PolicyRoots, locale?: UiLocale): Assessment {
+  const hard = hardDenyReason(exec, roots, locale)
   if (hard !== undefined) return deny(hard)
 
   const name = exec.name
   const args = record(exec.arguments)
 
   if ((name === 'bash' || name === 'pwsh') && typeof args?.command === 'string') {
-    return assessShell(args.command, name, roots)
+    return assessShell(args.command, name, roots, locale)
   }
   if (name === 'bash' || name === 'pwsh') {
-    return allow(name + ' command argument is missing or invalid; workspace-write sandbox applies')
+    return allow(name + reasonText(locale, ' 命令参数缺失或无效；workspace-write 沙箱适用', ' command argument is missing or invalid; workspace-write sandbox applies'))
   }
 
   if (READ_TOOLS.has(name)) {
     const path = pathArgument(args)
-    if (path === undefined) return allow('read-only project inspection')
+    if (path === undefined) return allow(reasonText(locale, '只读项目检查', 'read-only project inspection'))
     const normalized = normalizePath(path, roots.workspace, roots.home)
     // symlink 加固：以真实落点判定，防止工作区内 symlink 逃逸读取敏感路径时被误放行。
     const real = roots.resolveReal(normalized)
-    if (isWithin(roots.workspace, real)) return allow('read-only project inspection inside the workspace')
+    if (isWithin(roots.workspace, real)) return allow(reasonText(locale, '工作区内只读项目检查', 'read-only project inspection inside the workspace'))
     // 工作区外读：敏感路径（凭据/系统目录）交 LLM 审查，普通路径直接放行（只读无副作用，workspace-write 沙箱本就不限读）。
     return isCriticalPath(real, roots)
-      ? classify('reading a critical path outside the workspace requires semantic review: ' + real)
-      : allow('read-only inspection of a non-critical path outside the workspace')
+      ? classify(reasonText(locale, '读取工作区外关键路径需语义审查：', 'reading a critical path outside the workspace requires semantic review: ') + real)
+      : allow(reasonText(locale, '读取工作区外非关键路径', 'read-only inspection of a non-critical path outside the workspace'))
   }
 
   if (name === 'write' || name === 'edit' || name === 'apply_patch') {
     const path = pathArgument(args)
-    if (path === undefined) return allow(name + ' target path is missing; workspace-write sandbox applies')
+    if (path === undefined) return allow(name + reasonText(locale, ' 目标路径缺失；workspace-write 沙箱适用', ' target path is missing; workspace-write sandbox applies'))
     const normalized = normalizePath(path, roots.workspace, roots.home)
     // symlink 加固：以真实落点判定，工作区内 symlink 逃逸到区外时不再误判为“区内编辑”。
     const real = roots.resolveReal(normalized)
     // 工作区内受保护路径（.git 等）交 LLM；工作区外敏感 shell/凭据配置文件同样交 LLM，其余直接放行交给沙箱拦截 + escalation。
     if (isWithin(roots.workspace, real)) {
       return isProtectedProjectPath(real, roots)
-        ? classify('mutation of protected project path requires semantic review: ' + real)
-        : allow('routine project-local file edit')
+        ? classify(reasonText(locale, '变更受保护项目路径需语义审查：', 'mutation of protected project path requires semantic review: ') + real)
+        : allow(reasonText(locale, '常规项目本地文件编辑', 'routine project-local file edit'))
     }
     // 工作区外的敏感 shell / 凭据配置文件（.zshrc/.bashrc/.gitconfig/.env 等）提前交 LLM 审查，不再完全依赖沙箱拦截 + escalation 兜底。
     if (isSensitiveConfigFile(real, roots)) {
-      return classify('mutation of a sensitive config file outside the workspace requires semantic review: ' + real)
+      return classify(reasonText(locale, '变更工作区外敏感配置文件需语义审查：', 'mutation of a sensitive config file outside the workspace requires semantic review: ') + real)
     }
-    return allow('mutation outside the workspace; workspace-write sandbox will block it and offer escalation')
+    return allow(reasonText(locale, '工作区外变更；workspace-write 沙箱将拦截并提供提权', 'mutation outside the workspace; workspace-write sandbox will block it and offer escalation'))
   }
 
-  if (SESSION_STATE_TOOLS.has(name)) return allow('trusted Harness session-state operation')
-  if (HARNESS_READ_TOOLS.has(name)) return allow('trusted read-only Harness operation')
-  if (ORCHESTRATION_TOOLS.has(name)) return allow('orchestration call; child tool actions remain independently checked')
-  if (CODE_EXECUTION_TOOLS.has(name)) return allow('code execution container; inner tool calls are independently checked by policy and sandbox')
+  if (SESSION_STATE_TOOLS.has(name)) return allow(reasonText(locale, '受信任的 Harness 会话状态操作', 'trusted Harness session-state operation'))
+  if (HARNESS_READ_TOOLS.has(name)) return allow(reasonText(locale, '受信任的 Harness 只读操作', 'trusted read-only Harness operation'))
+  if (ORCHESTRATION_TOOLS.has(name)) return allow(reasonText(locale, '编排调用；子工具动作仍被独立检查', 'orchestration call; child tool actions remain independently checked'))
+  if (CODE_EXECUTION_TOOLS.has(name)) return allow(reasonText(locale, '代码执行容器；内部工具调用由策略与沙箱独立检查', 'code execution container; inner tool calls are independently checked by policy and sandbox'))
 
-  if (EXTERNAL_WRITE_TOOLS.has(name)) return classify('external write requires specific user authorization: ' + name)
+  if (EXTERNAL_WRITE_TOOLS.has(name)) return classify(reasonText(locale, '外部写入需用户明确授权：', 'external write requires specific user authorization: ') + name)
 
   if (DESTRUCTIVE_TOOL_NAME.test(name)) {
-    return classify('registered tool name indicates a destructive operation: ' + name)
+    return classify(reasonText(locale, '注册的工具名表示破坏性操作：', 'registered tool name indicates a destructive operation: ') + name)
   }
 
   if (name === 'terminal_open' || name === 'terminal_send') {
-    return classify('stateful terminal execution requires independent classification')
+    return classify(reasonText(locale, '有状态终端执行需独立分类', 'stateful terminal execution requires independent classification'))
   }
 
   // 未识别工具一律交 LLM 分类，不默认放行；即使分类器误判 allow，仍有 workspace-write 沙箱兜底文件写入。
-  return classify('unrecognized tool requires independent classification: ' + name)
+  return classify(reasonText(locale, '未识别工具需独立分类：', 'unrecognized tool requires independent classification: ') + name)
 }
 
 /** 常见工具的轨迹摘要字段（按优先级取第一个非空字符串）。 */

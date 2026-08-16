@@ -235,7 +235,8 @@ function SafeAutoCard(props: any) {
 /** 单条审批记录：可折叠展开，展开后显示完整 summary / reason / callId / time，并支持定位到会话中的操作。 */
 function TrailItem(props: any) {
   const [open, setOpen] = useState(false)
-  const { record, onLocate } = props
+  const { record, onLocate, t } = props
+  const decisionText = ({ allow: t('decisionAllow'), deny: t('decisionDeny'), ask: t('decisionAsk') } as Record<string, string>)[record.decision] ?? record.decision
   return jsxs('li', {
     className: 'sa_trailItem sa_trailItem--' + record.decision,
     children: [
@@ -248,7 +249,7 @@ function TrailItem(props: any) {
             'aria-expanded': open,
             onClick: () => setOpen(!open),
             children: [
-              jsx('span', { className: 'sa_trailMeta', children: record.layer + ' · ' + record.decision + ' · ' + record.toolName }),
+              jsx('span', { className: 'sa_trailMeta', children: record.layer + ' · ' + decisionText + ' · ' + record.toolName }),
               jsx('span', { className: open ? 'sa_trailChevron sa_trailChevronOpen' : 'sa_trailChevron', children: '▾' }),
             ],
           }),
@@ -256,18 +257,18 @@ function TrailItem(props: any) {
             type: 'button',
             className: 'sa_trailLocate',
             onClick: () => onLocate(record.callId),
-            children: '定位',
+            children: t('locate'),
           }),
         ],
       }),
       open ? jsxs('div', {
         className: 'sa_trailItemBody',
         children: [
-          record.summary ? jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: '操作' }), jsx('span', { className: 'sa_trailSummary', children: record.summary })] }) : null,
-          record.reason ? jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: '理由' }), jsx('span', { className: 'sa_trailReason', children: record.reason })] }) : null,
+          record.summary ? jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: t('summaryLabel') }), jsx('span', { className: 'sa_trailSummary', children: record.summary })] }) : null,
+          record.reason ? jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: t('reasonLabel') }), jsx('span', { className: 'sa_trailReason', children: record.reason })] }) : null,
           jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: 'callId' }), jsx('span', { className: 'sa_trailDetail', children: record.callId })] }),
-          jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: '时间' }), jsx('span', { className: 'sa_trailDetail', children: formatTime(record.time) })] }),
-          jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: '耗时' }), jsx('span', { className: 'sa_trailDetail', children: formatDuration(record.durationMs) })] }),
+          jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: t('timeLabel') }), jsx('span', { className: 'sa_trailDetail', children: formatTime(record.time) })] }),
+          jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: t('durationLabel') }), jsx('span', { className: 'sa_trailDetail', children: formatDuration(record.durationMs) })] }),
         ],
       }) : null,
     ],
@@ -276,7 +277,8 @@ function TrailItem(props: any) {
 
 function TrailPanel(props: any) {
   const [open, setOpen] = useState(false)
-  const trail = props.useTrail((snapshot: any) => snapshot) ?? []
+  const { t, useTrail } = props
+  const trail = useTrail((snapshot: any) => snapshot) ?? []
   const records = Array.isArray(trail) ? trail : []
   if (records.length === 0) return null
   const locate = (callId: string) => {
@@ -292,7 +294,7 @@ function TrailPanel(props: any) {
         type: 'button',
         className: 'sa_trailToggle',
         onClick: () => setOpen(!open),
-        children: (open ? '收起' : '审批轨迹') + ' ' + records.length,
+        children: (open ? t('trailCollapse') : t('trailTitle')) + ' ' + records.length,
       }),
       open ? jsx('ul', {
         className: 'sa_trailList',
@@ -300,6 +302,7 @@ function TrailPanel(props: any) {
           key: String(record.seq),
           record,
           onLocate: locate,
+          t,
         })),
       }) : null,
     ],
@@ -328,6 +331,7 @@ function apply(ctx: any) {
     name: 'shell.overlay',
     id: 'autogate-trail',
     order: 100,
+    locale: SETTINGS_NS,
     inject: () => trailController.inject(),
   }, TrailPanel))
 }
