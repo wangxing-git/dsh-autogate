@@ -19,7 +19,6 @@ export interface Config {
     /** 半自动权限预设键（默认 auto-ask）：危险操作转人工兜底弹窗。 */
     readonly presetName?: string;
     readonly workspaceRoot?: string;
-    readonly dshHome?: string;
     readonly tempRoots?: string[];
     readonly classifierEndpoint?: string;
     readonly classifierProvider?: string;

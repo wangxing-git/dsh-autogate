@@ -9,3 +9,8 @@ export type UiLocale = 'zh' | 'en'
 export function reasonText(locale: UiLocale | undefined, zh: string, en: string): string {
   return locale === 'zh' ? zh : en
 }
+
+/** 不可提权指引：危险操作硬 deny，不可通过沙箱提权放行。 */
+export function noEscalationHint(locale: UiLocale | undefined): string {
+  return reasonText(locale, '；此操作不可提权放行', '; this operation cannot be escalated')
+}

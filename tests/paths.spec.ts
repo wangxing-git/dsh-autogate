@@ -27,7 +27,7 @@ describe('isWithin', () => {
 })
 
 describe('hardDestructiveTargetReason', () => {
-  const roots = resolveRoots('/ws', { home: '/home/u', dshHome: '/home/u/.dsh' })
+  const roots = resolveRoots('/ws', { home: '/home/u' })
   it('拒绝文件系统根', () => {
     expect(hardDestructiveTargetReason('/', roots)).toContain('filesystem root')
   })
@@ -37,8 +37,16 @@ describe('hardDestructiveTargetReason', () => {
   it('拒绝凭据目录', () => {
     expect(hardDestructiveTargetReason('~/.ssh/id_rsa', roots)).toContain('credential')
   })
-  it('拒绝 DSH_HOME', () => {
-    expect(hardDestructiveTargetReason('/home/u/.dsh/settings.yaml', roots)).toContain('DSH_HOME')
+  it('DSH_HOME 变更/删除均不再硬 deny', () => {
+    expect(hardDestructiveTargetReason('/home/u/.dsh/settings.yaml', roots)).toBeUndefined()
+    expect(hardDestructiveTargetReason('/home/u/.dsh/settings.yaml', roots, undefined, 'mutation')).toBeUndefined()
+  })
+  it('mutation 模式下家目录根不再硬 deny（可逆写走提权）', () => {
+    expect(hardDestructiveTargetReason('~', roots, undefined, 'mutation')).toBeUndefined()
+  })
+  it('mutation 模式下文件系统根 / 系统关键路径仍硬 deny', () => {
+    expect(hardDestructiveTargetReason('/', roots, undefined, 'mutation')).toContain('filesystem root')
+    expect(hardDestructiveTargetReason('/etc/passwd', roots, undefined, 'mutation')).toContain('critical')
   })
   it('放行工作区路径', () => {
     expect(hardDestructiveTargetReason('/ws/build', roots)).toBeUndefined()
@@ -46,13 +54,12 @@ describe('hardDestructiveTargetReason', () => {
   it('zh 语言返回中文理由', () => {
     expect(hardDestructiveTargetReason('/', roots, 'zh')).toContain('文件系统根')
     expect(hardDestructiveTargetReason('~', roots, 'zh')).toContain('用户家目录')
-    expect(hardDestructiveTargetReason('/home/u/.dsh/settings.yaml', roots, 'zh')).toContain('DSH_HOME 路径')
     expect(hardDestructiveTargetReason('~/.ssh/id_rsa', roots, 'zh')).toContain('凭据关键路径')
   })
 })
 
 describe('isSensitiveConfigFile', () => {
-  const roots = resolveRoots('/ws', { home: '/home/u', dshHome: '/home/u/.dsh' })
+  const roots = resolveRoots('/ws', { home: '/home/u' })
   it('工作区外的敏感 shell 配置命中', () => {
     expect(isSensitiveConfigFile('/home/u/.zshrc', roots)).toBe(true)
     expect(isSensitiveConfigFile('/home/u/.bashrc', roots)).toBe(true)
@@ -74,7 +81,7 @@ describe('isSensitiveConfigFile', () => {
 })
 
 describe('isProtectedProjectPath', () => {
-  const roots = resolveRoots('/ws', { home: '/home/u', dshHome: '/home/u/.dsh' })
+  const roots = resolveRoots('/ws', { home: '/home/u' })
   it('工作区内敏感配置命中', () => {
     expect(isProtectedProjectPath('/ws/.env', roots)).toBe(true)
   })
@@ -98,7 +105,7 @@ describe('isFilesystemRoot', () => {
 })
 
 describe('isCriticalPath', () => {
-  const roots = resolveRoots('/ws', { home: '/home/u', dshHome: '/home/u/.dsh' })
+  const roots = resolveRoots('/ws', { home: '/home/u' })
   it('命中系统目录', () => {
     expect(isCriticalPath('/etc/passwd', roots)).toBe(true)
     expect(isCriticalPath('/usr/bin/node', roots)).toBe(true)
@@ -147,7 +154,7 @@ describe('resolveRealPath', () => {
 })
 
 describe('hardDestructiveTargetReason symlink 逃逸加固', () => {
-  const base = { home: '/home/u', dshHome: '/home/u/.dsh' }
+  const base = { home: '/home/u' }
   const linkTo = (link: string, target: string) => (p: string) =>
     p === link ? target : p.startsWith(link + '/') ? target + p.slice(link.length) : p
   it('工作区内 symlink 指向系统关键路径 → 拒绝', () => {
@@ -158,9 +165,9 @@ describe('hardDestructiveTargetReason symlink 逃逸加固', () => {
     const roots = resolveRoots('/ws', base, linkTo('/ws/home', '/home/u'))
     expect(hardDestructiveTargetReason('/ws/home', roots)).toContain('user home root')
   })
-  it('工作区内 symlink 指向 DSH_HOME → 拒绝', () => {
+  it('工作区内 symlink 指向 DSH_HOME → 不再拒绝（走提权）', () => {
     const roots = resolveRoots('/ws', base, linkTo('/ws/dsh', '/home/u/.dsh'))
-    expect(hardDestructiveTargetReason('/ws/dsh/settings.yaml', roots)).toContain('DSH_HOME')
+    expect(hardDestructiveTargetReason('/ws/dsh/settings.yaml', roots)).toBeUndefined()
   })
 })
 

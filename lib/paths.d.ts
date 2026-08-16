@@ -5,7 +5,6 @@ export type RealPathResolver = (path: string) => string;
 export interface PolicyRoots {
     workspace: string;
     home: string;
-    dshHome: string;
     tempRoots: string[];
     /** 真实路径解析器（跟随符号链接）；默认 Node 原生 realpath，测试可注入。 */
     resolveReal: RealPathResolver;
@@ -13,7 +12,6 @@ export interface PolicyRoots {
 /** 可选的根路径覆盖。 */
 export interface RootOptions {
     workspaceRoot?: string;
-    dshHome?: string;
     tempRoots?: string[];
     home?: string;
 }
@@ -43,7 +41,13 @@ export declare function isCriticalPath(target: string, roots: PolicyRoots): bool
 export declare function isSensitiveConfigFile(target: string, roots: PolicyRoots): boolean;
 /** 是否为工作区内受保护的元数据路径（如 .git）或敏感配置文件。 */
 export declare function isProtectedProjectPath(target: string, roots: PolicyRoots): boolean;
-/** 确定性危险目标熔断：根/家目录/DSH_HOME/系统关键路径返回拒绝原因。 */
-export declare function hardDestructiveTargetReason(target: string, roots: PolicyRoots, locale?: UiLocale): string | undefined;
+/** 危险目标熔断模式：mutation 变更（write/edit）放宽家目录根（可逆写走提权）；destruction 删除（rm/破坏性工具）仍硬 deny 家目录根。 */
+export type DestructiveTargetMode = 'mutation' | 'destruction';
+/** 确定性危险目标熔断：根/家目录根/系统关键路径返回拒绝原因。
+ *  - 文件系统根与系统/凭据关键路径：变更与删除一律硬 deny（最危险、不可授权）。
+ *  - 家目录根：变更（写/编辑目录本身，可逆）走提权，删除（rm ~，不可逆）仍硬 deny。
+ *  - DSH_HOME：变更与删除均不再硬 deny（agent 自身的指令/配置目录，属常规可逆写），
+ *    走「工作区外路径 → 沙箱拦截 + escalation 审批」的通用处理。 */
+export declare function hardDestructiveTargetReason(target: string, roots: PolicyRoots, locale?: UiLocale, mode?: DestructiveTargetMode): string | undefined;
 /** 解析运行时根路径。 */
 export declare function resolveRoots(activeWorkspace: string | undefined, options?: RootOptions, resolveReal?: RealPathResolver): PolicyRoots;

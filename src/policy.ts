@@ -2,7 +2,7 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { hardDestructiveTargetReason, isCriticalPath, isProtectedProjectPath, isSensitiveConfigFile, isWithin, normalizePath, type PolicyRoots } from './paths.js'
 import { assessShell, hardDenyShellReason } from './shell.js'
 import type { Assessment, ManagedMode } from './types.js'
-import { reasonText, type UiLocale } from './i18n.js'
+import { noEscalationHint, reasonText, type UiLocale } from './i18n.js'
 
 function allow(reason: string): Assessment {
   return { decision: 'allow', reason }
@@ -78,20 +78,20 @@ export function hardDenyReason(exec: Readonly<ToolExecution>, roots: PolicyRoots
     return hardDenyShellReason(args.command, name, roots, locale, mode)
   }
   if ((/^(?:web_fetch|web_search|curl|wget)/i.test(name) || EXTERNAL_WRITE_TOOLS.has(name)) && containsCredentialMaterial(exec.arguments)) {
-    return reasonText(locale, '外部调用包含凭据或私钥材料', 'external call contains credential or private-key material')
+    return reasonText(locale, '外部调用包含凭据或私钥材料', 'external call contains credential or private-key material') + noEscalationHint(locale)
   }
   if (['write', 'edit', 'apply_patch'].includes(name)) {
     const path = pathArgument(args)
     if (path !== undefined) {
-      const reason = hardDestructiveTargetReason(path, roots, locale)
-      if (reason !== undefined) return reasonText(locale, '变更目标为 ', 'mutation targets ') + reason
+      const reason = hardDestructiveTargetReason(path, roots, locale, 'mutation')
+      if (reason !== undefined) return reasonText(locale, '变更目标为 ', 'mutation targets ') + reason + noEscalationHint(locale)
     }
   }
   if (DESTRUCTIVE_TOOL_NAME.test(name)) {
     const path = pathArgument(args)
     if (path !== undefined) {
       const reason = hardDestructiveTargetReason(path, roots, locale)
-      if (reason !== undefined) return reasonText(locale, '破坏性工具目标为 ', 'destructive tool targets ') + reason
+      if (reason !== undefined) return reasonText(locale, '破坏性工具目标为 ', 'destructive tool targets ') + reason + noEscalationHint(locale)
     }
   }
   return undefined

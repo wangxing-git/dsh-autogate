@@ -69,7 +69,6 @@ export interface Config {
   /** 半自动权限预设键（默认 auto-ask）：危险操作转人工兜底弹窗。 */
   readonly presetName?: string
   readonly workspaceRoot?: string
-  readonly dshHome?: string
   readonly tempRoots?: string[]
   readonly classifierEndpoint?: string
   readonly classifierProvider?: string
@@ -91,7 +90,6 @@ export interface Config {
 export const Config: z<Config> = z.object({
   presetName: z.string().default(SEMI_AUTO_PERMISSION_PRESET).description('半自动权限预设键（默认 auto-ask）：危险操作转人工兜底弹窗'),
   workspaceRoot: z.string().description('覆盖工作区根目录（默认取会话 cwd）'),
-  dshHome: z.string().description('覆盖 DSH_HOME 目录（默认 ~/.dsh 或 $DSH_HOME）'),
   tempRoots: z.array(z.string()).description('信任的临时目录列表（默认系统临时目录）'),
   classifierEndpoint: z.string().description('独立 OpenAI 兼容分类端点（HTTPS；loopback 可用 http）'),
   classifierProvider: z.string().description('固定分类 provider（须与 classifierModel 成对配置）'),
@@ -180,7 +178,6 @@ function rootOptionsFrom(config: Config): RootOptions {
   const tempRoots = config.tempRoots === undefined || config.tempRoots.length === 0 ? undefined : config.tempRoots
   return {
     ...(config.workspaceRoot === undefined ? {} : { workspaceRoot: config.workspaceRoot }),
-    ...(config.dshHome === undefined ? {} : { dshHome: config.dshHome }),
     ...(tempRoots === undefined ? {} : { tempRoots }),
   }
 }

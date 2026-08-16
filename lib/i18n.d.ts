@@ -6,3 +6,5 @@ export type UiLocale = 'zh' | 'en';
  * 两个文案参数都会先行求值（模板字符串），因此可安全嵌入动态值。
  */
 export declare function reasonText(locale: UiLocale | undefined, zh: string, en: string): string;
+/** 不可提权指引：危险操作硬 deny，不可通过沙箱提权放行。 */
+export declare function noEscalationHint(locale: UiLocale | undefined): string;

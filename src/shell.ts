@@ -1,7 +1,7 @@
 import { basename } from 'node:path'
 import { globStaticPrefix, hardDestructiveTargetReason, isWithin, normalizePath, type PolicyRoots } from './paths.js'
 import type { Assessment, ManagedMode } from './types.js'
-import { reasonText, type UiLocale } from './i18n.js'
+import { noEscalationHint, reasonText, type UiLocale } from './i18n.js'
 
 export type ShellKind = 'bash' | 'pwsh'
 
@@ -49,10 +49,10 @@ const NETWORK_COMMAND = /(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod)/i
 export function hardDenyShellReason(source: string, _shell: ShellKind, _roots: PolicyRoots, locale?: UiLocale, mode?: ManagedMode): string | undefined {
   const compact = source.trim()
   if (PRIVILEGE_ESCALATION.test(compact)) return privilegeReason(mode, locale)
-  if (SELF_DESTRUCTIVE.test(compact)) return reasonText(locale, '不允许自毁或系统级命令', 'self-destructive or system-level command is not permitted')
-  if (NETWORK_COMMAND.test(compact) && SENSITIVE_MARKER.test(compact)) return reasonText(locale, '不允许凭据或私密数据外传', 'credential or private-data exfiltration pattern is not permitted')
-  if (/rm\s+(?:-[a-z]*[fr][a-z]*\s+)*\/(?:\s|$)/.test(compact)) return reasonText(locale, '不允许删除文件系统根', 'deleting the filesystem root is not permitted')
-  if (/(?:rm|Remove-Item)\s+(?:-[a-z]*[fr][a-z]*\s+)*(?:~|\$HOME|\$env:HOME)(?:\s|$)/i.test(compact)) return reasonText(locale, '不允许删除用户家目录', 'deleting the user home root is not permitted')
+  if (SELF_DESTRUCTIVE.test(compact)) return reasonText(locale, '不允许自毁或系统级命令', 'self-destructive or system-level command is not permitted') + noEscalationHint(locale)
+  if (NETWORK_COMMAND.test(compact) && SENSITIVE_MARKER.test(compact)) return reasonText(locale, '不允许凭据或私密数据外传', 'credential or private-data exfiltration pattern is not permitted') + noEscalationHint(locale)
+  if (/rm\s+(?:-[a-z]*[fr][a-z]*\s+)*\/(?:\s|$)/.test(compact)) return reasonText(locale, '不允许删除文件系统根', 'deleting the filesystem root is not permitted') + noEscalationHint(locale)
+  if (/(?:rm|Remove-Item)\s+(?:-[a-z]*[fr][a-z]*\s+)*(?:~|\$HOME|\$env:HOME)(?:\s|$)/i.test(compact)) return reasonText(locale, '不允许删除用户家目录', 'deleting the user home root is not permitted') + noEscalationHint(locale)
   return undefined
 }
 
@@ -152,7 +152,7 @@ function assessDestructive(name: string, tokens: string[], roots: PolicyRoots, l
   for (const target of targets) {
     // glob 目标：先对其静态前缀做危险判定，防止 /*、/etc/*、~/*、~/.* 这类绕过精确路径匹配。
     const reason = hardDestructiveTargetReason(globStaticPrefix(target), roots, locale)
-    if (reason !== undefined) return deny(reasonText(locale, '破坏性操作目标为 ', 'destructive operation targets ') + reason)
+    if (reason !== undefined) return deny(reasonText(locale, '破坏性操作目标为 ', 'destructive operation targets ') + reason + noEscalationHint(locale))
   }
   // dd 是块设备级操作，参数形如 if=/of=，静态路径判定不可靠，交 LLM 分类。
   if (name === 'dd') return classify(reasonText(locale, 'dd 块设备操作需独立分类', 'dd block-device operation requires independent classification'))
@@ -189,7 +189,7 @@ export function assessShell(source: string, shell: ShellKind, roots: PolicyRoots
 
   // 提权/自毁命令：即使原始正则被引号拼接（如 s'u'do）绕过，tokenize 后仍能确定性拒绝。
   if (PRIVILEGE_ESCALATION_COMMANDS.has(name)) return deny(privilegeReason(mode, locale))
-  if (SELF_DESTRUCTIVE_COMMANDS.has(name)) return deny(reasonText(locale, '不允许自毁或系统级命令', 'self-destructive or system-level command is not permitted'))
+  if (SELF_DESTRUCTIVE_COMMANDS.has(name)) return deny(reasonText(locale, '不允许自毁或系统级命令', 'self-destructive or system-level command is not permitted') + noEscalationHint(locale))
 
   if (isNestedInterpreter(name, tokens)) {
     if (/\b(?:rm|rmdir|unlink|shred|os\.(?:remove|unlink)|shutil\.rmtree|file\.delete)\b/.test(compact)) {

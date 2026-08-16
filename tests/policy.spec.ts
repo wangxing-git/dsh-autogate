@@ -3,7 +3,7 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { resolveRoots } from '../src/paths.js'
 import { assessTool, hardDenyReason, hasSandboxEscalation, isSandboxEscalationRetry, summarizeToolArguments } from '../src/policy.js'
 
-const roots = resolveRoots('/ws', { home: '/home/u', dshHome: '/home/u/.dsh' })
+const roots = resolveRoots('/ws', { home: '/home/u' })
 
 function execution(name: string, args: unknown): ToolExecution {
   return { name, arguments: args, agent: undefined, signal: new AbortController().signal } as unknown as ToolExecution
@@ -147,6 +147,24 @@ describe('hardDenyReason 凭据外传与关键路径写', () => {
   it('写工具命中关键路径硬拒绝', () => {
     expect(hardDenyReason(execution('write', { file_path: '~/.ssh/id_rsa', content: 'x' }), roots)).toContain('mutation targets')
   })
+  it('变更 DSH_HOME 不再硬 deny（交沙箱 + escalation）', () => {
+    expect(hardDenyReason(execution('write', { file_path: '~/.dsh/AGENTS.md', content: 'x' }), roots)).toBeUndefined()
+    const assessment = assessTool(execution('write', { file_path: '~/.dsh/AGENTS.md', content: 'x' }), roots)
+    expect(assessment.decision).toBe('allow')
+    expect(assessment.reason).toContain('offer escalation')
+  })
+  it('删除 DSH_HOME 不再硬 deny（破坏性工具交 LLM 分类）', () => {
+    expect(hardDenyReason(execution('delete_file', { file_path: '~/.dsh/settings.yaml' }), roots)).toBeUndefined()
+    expect(assessTool(execution('delete_file', { file_path: '~/.dsh/settings.yaml' }), roots).decision).toBe('ask')
+  })
+  it('变更家目录根不再硬 deny（走提权）；变更系统关键路径仍硬 deny', () => {
+    expect(hardDenyReason(execution('write', { file_path: '~', content: 'x' }), roots)).toBeUndefined()
+    expect(hardDenyReason(execution('write', { file_path: '/etc/foo', content: 'x' }), roots)).toContain('cannot be escalated')
+  })
+  it('破坏性工具与凭据外传的拒绝附带不可提权指引', () => {
+    expect(hardDenyReason(execution('delete_file', { file_path: '/etc/passwd' }), roots)).toContain('cannot be escalated')
+    expect(hardDenyReason(execution('web_search', { query: 'x', headers: { Authorization: 'Bearer abcdefghijklmnop' } }), roots)).toContain('cannot be escalated')
+  })
   it('无凭据外发不拒绝', () => {
     expect(hardDenyReason(execution('web_search', { query: 'hello' }), roots)).toBeUndefined()
   })
@@ -161,6 +179,13 @@ describe('locale 中文理由', () => {
   it('hardDenyReason zh：关键路径写返回中文', () => {
     expect(hardDenyReason(execution('delete_file', { file_path: '/etc/passwd' }), roots, 'zh')).toContain('破坏性工具目标为')
     expect(hardDenyReason(execution('write', { file_path: '~/.ssh/id_rsa', content: 'x' }), roots, 'zh')).toContain('变更目标为')
+  })
+  it('hardDenyReason zh：变更系统关键路径与破坏性附不可提权指引', () => {
+    expect(hardDenyReason(execution('write', { file_path: '/etc/foo', content: 'x' }), roots, 'zh')).toContain('不可提权放行')
+    expect(hardDenyReason(execution('delete_file', { file_path: '/etc/passwd' }), roots, 'zh')).toContain('不可提权放行')
+  })
+  it('hardDenyReason zh：变更 DSH_HOME 不再拒绝', () => {
+    expect(hardDenyReason(execution('write', { file_path: '~/.dsh/AGENTS.md', content: 'x' }), roots, 'zh')).toBeUndefined()
   })
   it('assessTool zh：读工作区外关键路径', () => {
     const a = assessTool(execution('read', { file_path: '/etc/passwd' }), roots, 'zh')
@@ -184,7 +209,7 @@ describe('hasSandboxEscalation', () => {
 })
 
 describe('assessTool symlink 逃逸加固', () => {
-  const base = { home: '/home/u', dshHome: '/home/u/.dsh' }
+  const base = { home: '/home/u' }
   const linkTo = (link: string, target: string) => (p: string) =>
     p === link ? target : p.startsWith(link + '/') ? target + p.slice(link.length) : p
   it('write 工作区内 symlink 逃逸到区外普通路径 → 交给沙箱放行', () => {
