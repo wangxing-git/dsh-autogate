@@ -41,6 +41,8 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 
     # 从 GitHub 安装（编译产物 lib/ 已随仓库提交）
     dsh plugin --profile web add github:wangxing-git/dsh-autogate
+    # 或当 dsh 不在 PATH 中时：
+    npx @deepseek-ai/dsh plugin --profile web add github:wangxing-git/dsh-autogate
 
     # 重启 dsh
 

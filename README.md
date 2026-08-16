@@ -41,6 +41,8 @@ This plugin is a **decision layer that reduces manual approvals — not a securi
 
     # Install from GitHub (compiled lib/ is committed)
     dsh plugin --profile web add github:wangxing-git/dsh-autogate
+    # or, if dsh is not on your PATH:
+    npx @deepseek-ai/dsh plugin --profile web add github:wangxing-git/dsh-autogate
 
     # Restart dsh
 
