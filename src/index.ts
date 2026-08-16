@@ -419,7 +419,12 @@ export function apply(ctx: Context, config: Config = {}): void {
   // 同步硬 deny：单调 guard，后续监听器/分类器无法覆盖。
   ctx.tools.guard(exec => {
     const authority = authorityFor(exec)
-    return authority !== undefined ? hardDenyReason(exec, rootsFor(exec), uiLocale, authority.mode) : undefined
+    if (authority === undefined) return undefined
+    const reason = hardDenyReason(exec, rootsFor(exec), uiLocale, authority.mode)
+    // 同步硬 deny 同样落入审批轨迹：guard 阶段直接拒绝，不会进入 pre-execute，
+    // 因此需在此处记录，否则轨迹面板看不到这类决策。
+    if (reason !== undefined) recordTrail(exec, 'deny', 'L0', reason, 0)
+    return reason
   })
 
   // 异步判定：allow 放行 / deny 拒绝 / 无法静态分类转人工或交 LLM 两态裁决。

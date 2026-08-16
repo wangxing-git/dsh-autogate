@@ -217,6 +217,21 @@ describe('apply 注册的 escalation answerer（approval/request）', () => {
 })
 
 describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
+  it('guard 同步硬 deny 也记录到轨迹（不经过 pre-execute）', async () => {
+    const { ctx, guards, rpcHandlers } = createMockContext(allowChunks)
+    apply(ctx as any, { preflight: true })
+    const exec = { name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-guard-trail', agent: autoAgent(), signal: undefined }
+    expect(guards[0](exec as any)).toBe('半自动模式不允许提权')
+
+    const handler = rpcHandlers.get('/autogate')!
+    const result = await handler('trail', undefined, undefined as any)
+    expect(result.ok).toBe(true)
+    const records = (result as any).value
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ callId: 'call-guard-trail', toolName: 'bash', decision: 'deny', layer: 'L0' })
+    expect(records[0].reason).toBe('半自动模式不允许提权')
+  })
+
   it('L0 硬 deny 记录到轨迹，RPC trail 端点返回记录（preflight 开启）', async () => {
     const { ctx, listeners, rpcHandlers } = createMockContext(allowChunks)
     apply(ctx as any, { preflight: true })
