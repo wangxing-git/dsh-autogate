@@ -1,6 +1,6 @@
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useState } from 'react'
-import { CardForm, SETTINGS_NS, TrailController, boolField, en, formatDuration, formatTime, numberField, textField, zh } from './client-logic.js'
+import { CardForm, RpcSettingsSource, SETTINGS_NS, TrailController, boolField, en, formatDuration, formatTime, numberField, textField, zh } from './client-logic.js'
 
 // ==== 卡片样式（复用 DSH 主题变量，运行时注入） ====
 const CSS = `.sa_card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;list-style:none}
@@ -30,7 +30,8 @@ const CSS = `.sa_card{border:1px solid var(--dsw-alias-border-l2);background:var
 .sa_failed{min-width:0;color:var(--dsw-alias-label-error);flex:1;margin:0;font-size:12px;line-height:1.5}
 .sa_btn{appearance:none;font:inherit;cursor:pointer;border-radius:8px;padding:5px 14px;font-size:13px;line-height:1.5}
 .sa_btnDiscard{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:0 0}
-.sa_btnSave{border:1px solid #0000;color:#fff;background:var(--dsw-alias-brand-primary)}
+.sa_btnSave{border:1px solid #0000;color:var(--dsw-alias-label-primary-foreground);background:var(--dsw-alias-button-primary-fill)}
+.sa_btnSave:hover{background:var(--dsw-alias-button-primary-hover)}
 .sa_trail{position:fixed;right:16px;bottom:16px;z-index:1000;display:flex;flex-direction:column;align-items:flex-end;gap:8px;max-width:380px;pointer-events:auto}
 .sa_trailToggle{appearance:none;font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);border-radius:999px;padding:6px 14px;font-size:12px;line-height:1.5;box-shadow:0 2px 8px #0000002e}
 .sa_trailList{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:360px;overflow:auto}
@@ -68,8 +69,8 @@ class SafeAutoCardController {
   form: CardForm
   store: any
 
-  constructor(scope: any) {
-    this.form = new CardForm(scope, [
+  constructor(rpc: any) {
+    this.form = new CardForm(new RpcSettingsSource(rpc), [
       textField('presetName'),
       textField('fullAutoPresetName'),
       textField('classifierProvider'),
@@ -313,13 +314,13 @@ function TrailPanel(props: any) {
 }
 
 // ==== apply ====
-const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope']
+const inject = ['slots', 'locale', 'connection']
 
 function apply(ctx: any) {
   injectCss()
   ctx.effect(() => ctx.locale.register(SETTINGS_NS, { zh, en }), 'autogate: card dictionaries')
   const t = ctx.locale.bind(SETTINGS_NS)
-  const controller = new SafeAutoCardController(ctx.settingsScope.bind({ namespace: SETTINGS_NS }))
+  const controller = new SafeAutoCardController(ctx.connection?.rpc)
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
     id: 'autogate',

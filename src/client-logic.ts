@@ -104,16 +104,23 @@ export class CardForm {
     this.saving = true
     this.failed = false
     this.publish()
+    // 一次性收集全部 staged 变更并批量提交：跨字段约束（如 provider/model 成对）须在最终态校验，
+    // 逐字段写会让中间态被 settings 服务拒绝。
+    const set: Record<string, unknown> = {}
+    const unset: string[] = []
     let landed = true
     for (const [field, staged] of this.staged) {
       const spec = this.specs.get(field)
       if (staged.clear) {
-        await this.scope.unset(field)
+        unset.push(field)
         continue
       }
       const parsed = spec.parse(staged.text)
       if (parsed === undefined || parsed.kind !== 'set') { landed = false; continue }
-      await this.scope.set(field, parsed.value)
+      set[field] = parsed.value
+    }
+    if (landed && (Object.keys(set).length > 0 || unset.length > 0)) {
+      landed = await this.scope.write(set, unset)
     }
     if (landed) this.staged.clear()
     this.saving = false
@@ -122,6 +129,58 @@ export class CardForm {
   }
 
   publish() { for (const l of this.listeners) l() }
+}
+
+// ==== 设置卡数据源：自有 RPC（/autogate settings.*），绕过 settingsScope 的 namespace 白名单 ====
+export class RpcSettingsSource {
+  store: any
+  rpc: any
+
+  constructor(rpc: any) {
+    this.rpc = rpc
+    this.store = createSnapshotStore({ status: 'loading', writable: false, value: {}, user: {} })
+    void this.refresh()
+  }
+
+  async refresh() {
+    if (this.rpc === undefined || typeof this.rpc.call !== 'function') {
+      this.store.set({ status: 'unavailable', writable: false, value: {}, user: {} })
+      return
+    }
+    try {
+      const result = await this.rpc.call('/autogate', 'settings.get', {})
+      if (result !== null && typeof result === 'object' && result.ok === true && result.value !== null && typeof result.value === 'object') {
+        this.store.set({
+          status: 'ready',
+          writable: result.value.writable === true,
+          value: result.value.value ?? {},
+          user: result.value.user ?? {},
+        })
+      } else {
+        this.store.set({ status: 'unavailable', writable: false, value: {}, user: {} })
+      }
+    } catch {
+      // 拉取失败保持上一份快照
+    }
+  }
+
+  getSnapshot() { return this.store.getSnapshot() }
+
+  subscribe(listener: () => void) { return this.store.subscribe(listener) }
+
+  async write(set: Record<string, unknown>, unset: string[]): Promise<boolean> {
+    if (this.rpc === undefined || typeof this.rpc.call !== 'function') return false
+    try {
+      const result = await this.rpc.call('/autogate', 'settings.write', { set, unset })
+      if (result !== null && typeof result === 'object' && result.ok === true) {
+        await this.refresh()
+        return true
+      }
+      return false
+    } catch {
+      return false
+    }
+  }
 }
 
 // ==== 审批轨迹：RPC 拉取 + 轮询 ====

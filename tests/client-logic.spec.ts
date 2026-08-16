@@ -14,7 +14,7 @@ vi.mock('@deepseek-ai/dsh-client-runtime/client', () => {
   return { createSnapshotStore: fakeStore }
 })
 
-import { CardForm, TrailController, boolField, en, formatDuration, formatTime, numberField, textField, zh } from '../src/client-logic.js'
+import { CardForm, RpcSettingsSource, TrailController, boolField, en, formatDuration, formatTime, numberField, textField, zh } from '../src/client-logic.js'
 
 describe('formatTime', () => {
   it('格式化为本地 HH:MM:SS', () => {
@@ -70,16 +70,13 @@ describe('字段转换 spec', () => {
 
 describe('CardForm staged 编辑与保存', () => {
   function mockScope(snapshot: Record<string, unknown>) {
-    const sets: [string, unknown][] = []
-    const unsets: string[] = []
+    const writes: { set: Record<string, unknown>; unset: string[] }[] = []
     let subscriber: (() => void) | undefined
     return {
       getSnapshot: () => snapshot,
       subscribe: (cb: () => void) => { subscriber = cb },
-      set: async (field: string, value: unknown) => { sets.push([field, value]) },
-      unset: async (field: string) => { unsets.push(field) },
-      _sets: sets,
-      _unsets: unsets,
+      write: async (set: Record<string, unknown>, unset: string[]) => { writes.push({ set, unset }); return true },
+      _writes: writes,
       _notify: () => subscriber?.(),
     }
   }
@@ -98,7 +95,7 @@ describe('CardForm staged 编辑与保存', () => {
     expect(form.field('presetName')).toEqual({ text: 'custom', overridden: true, invalid: false })
     expect(form.shell().dirty).toBe(true)
     await form.save()
-    expect(scope._sets).toEqual([['presetName', 'custom']])
+    expect(scope._writes).toEqual([{ set: { presetName: 'custom' }, unset: [] }])
     expect(form.shell().dirty).toBe(false)
     expect(form.shell().failed).toBe(false)
   })
@@ -109,7 +106,7 @@ describe('CardForm staged 编辑与保存', () => {
     form.actions().edit('classifierTimeoutMs', 'abc')
     expect(form.field('classifierTimeoutMs').invalid).toBe(true)
     await form.save()
-    expect(scope._sets).toHaveLength(0)
+    expect(scope._writes).toHaveLength(0)
     expect(form.shell().failed).toBe(true)
   })
 
@@ -119,7 +116,7 @@ describe('CardForm staged 编辑与保存', () => {
     form.actions().resetField('presetName')
     expect(form.field('presetName').overridden).toBe(false)
     await form.save()
-    expect(scope._unsets).toEqual(['presetName'])
+    expect(scope._writes).toEqual([{ set: {}, unset: ['presetName'] }])
   })
 
   it('discard 清空 staged', () => {
@@ -137,6 +134,55 @@ describe('CardForm staged 编辑与保存', () => {
     const form = new CardForm(scope, [textField('presetName')])
     expect(form.shell().available).toBe(false)
     expect(form.shell().writable).toBe(false)
+  })
+})
+
+describe('RpcSettingsSource RPC 数据源', () => {
+  it('拉取成功 → status ready 且透传 value/user/writable', async () => {
+    const source = new RpcSettingsSource({ call: async () => ({ ok: true, value: { writable: true, value: { preflight: true }, user: { preflight: true } } }) })
+    await source.refresh()
+    expect(source.getSnapshot()).toEqual({ status: 'ready', writable: true, value: { preflight: true }, user: { preflight: true } })
+  })
+
+  it('RPC 返回非 ok → status unavailable', async () => {
+    const source = new RpcSettingsSource({ call: async () => ({ ok: false, error: { code: 'unavailable' } }) })
+    await source.refresh()
+    expect(source.getSnapshot().status).toBe('unavailable')
+  })
+
+  it('RPC 抛错 → 保持上一份快照（初始 loading）', async () => {
+    const source = new RpcSettingsSource({ call: async () => { throw new Error('down') } })
+    await source.refresh()
+    expect(source.getSnapshot().status).toBe('loading')
+  })
+
+  it('write 成功 → 返回 true 并刷新快照', async () => {
+    let snapshot: any = { status: 'ready', writable: true, value: { preflight: false }, user: {} }
+    const source = new RpcSettingsSource({
+      call: async (_channel: string, endpoint: string, payload: any) => {
+        if (endpoint === 'settings.get') return { ok: true, value: snapshot }
+        if (endpoint === 'settings.write') {
+          snapshot = { status: 'ready', writable: true, value: { preflight: payload.set.preflight }, user: { preflight: true } }
+          return { ok: true, value: true }
+        }
+        throw new Error('unknown endpoint')
+      },
+    })
+    await source.refresh()
+    expect(await source.write({ preflight: true }, [])).toBe(true)
+    expect(source.getSnapshot().value).toEqual({ preflight: true })
+  })
+
+  it('write 失败 → 返回 false', async () => {
+    const source = new RpcSettingsSource({ call: async () => ({ ok: false, error: { code: 'rejected' } }) })
+    expect(await source.write({ preflight: true }, [])).toBe(false)
+  })
+
+  it('rpc 缺失 → unavailable 且 write 返回 false', async () => {
+    const source = new RpcSettingsSource(undefined)
+    await source.refresh()
+    expect(source.getSnapshot().status).toBe('unavailable')
+    expect(await source.write({}, [])).toBe(false)
   })
 })
 

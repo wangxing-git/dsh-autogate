@@ -8,7 +8,7 @@ import { resolveRoots, type RootOptions } from './paths.js'
 import { assessTool, hardDenyReason, hasSandboxEscalation, isSandboxEscalationRetry, summarizeToolArguments } from './policy.js'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { ManagedMode, SafetyClassifier } from './types.js'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { installSettingsSection, settingsNamespace, type SettingsProvider } from '@deepseek-ai/dsh-settings'
 import { createApprovalTrail, type ApprovalDecision, type ApprovalLayer } from './trail.js'
 import type { UiLocale } from './i18n.js'
 
@@ -32,6 +32,31 @@ type TrailRpcHandler = (endpoint: string, payload: unknown, signal: AbortSignal)
 interface TrailRpcHost {
   handle(channel: string, handler: TrailRpcHandler, options: { authority: 'trusted-host' | 'loopback' }): () => Promise<void>
 }
+
+/** 设置卡可编辑的 Config 字段白名单：settings.write 仅允许写这些键，其余字段须手改 settings.yaml。 */
+const SETTINGS_EDITABLE_FIELDS: readonly string[] = [
+  'preflight',
+  'presetName',
+  'fullAutoPresetName',
+  'classifierProvider',
+  'classifierModel',
+  'classifierEndpoint',
+  'classifierPrompt',
+  'classifierTimeoutMs',
+  'classifierMaxOutputTokens',
+  'classifierRetry',
+]
+
+/** 校验 settings.write 的载荷形状：{ set: Record<string, unknown>, unset: string[] }。 */
+function parseWritePayload(payload: unknown): { set: Record<string, unknown>; unset: string[] } | undefined {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined
+  const record = payload as Record<string, unknown>
+  const { set, unset } = record
+  if (set === null || typeof set !== 'object' || Array.isArray(set)) return undefined
+  if (!Array.isArray(unset) || !unset.every((field): field is string => typeof field === 'string')) return undefined
+  return { set: set as Record<string, unknown>, unset }
+}
+
 /** 半自动权限预设键（自动但危险时转人工兜底弹窗；默认档）。 */
 export const SEMI_AUTO_PERMISSION_PRESET = 'auto-ask'
 
@@ -381,6 +406,65 @@ export function apply(ctx: Context, config: Config = {}): void {
   })
   rebuild()
 
+  // 设置卡经自有 RPC 通道读写 settings，绕过 WEB_SETTINGS_NAMESPACES 白名单（该白名单只约束
+  // 客户端 settingsScope 通道，不约束 slot 导航）。settings 服务卸载时置空句柄，RPC 端点 fail-closed。
+  const settingsNs = settingsNamespace('autogate')
+  let settingsProvider: SettingsProvider | undefined
+  ctx.inject(['settings'], (sctx) => {
+    settingsProvider = sctx.settings
+    sctx.effect(() => () => { settingsProvider = undefined })
+  })
+
+  const settingsGet = (): TrailRpcResult => {
+    const provider = settingsProvider
+    if (provider === undefined) {
+      return { ok: false, error: { code: 'unavailable', message: 'settings 服务未挂载，设置卡不可用', details: {} } }
+    }
+    try {
+      const descriptor = provider.describe({ redactSecrets: true }).find((item) => String(item.ns) === String(settingsNs))
+      return {
+        ok: true,
+        value: {
+          available: true,
+          writable: provider.writable,
+          value: descriptor?.value ?? provider.get(settingsNs) ?? {},
+          user: descriptor?.user ?? {},
+          revision: descriptor?.revision ?? 0,
+        },
+      }
+    } catch (error) {
+      return { ok: false, error: { code: 'unavailable', message: error instanceof Error ? error.message : String(error), details: {} } }
+    }
+  }
+
+  const settingsWrite = async (payload: unknown): Promise<TrailRpcResult> => {
+    const provider = settingsProvider
+    if (provider === undefined) {
+      return { ok: false, error: { code: 'unavailable', message: 'settings 服务未挂载，无法写入', details: {} } }
+    }
+    const parsed = parseWritePayload(payload)
+    if (parsed === undefined) {
+      return { ok: false, error: { code: 'invalid', message: 'settings.write 需要 { set, unset } 载荷', details: {} } }
+    }
+    const invalidField = [...Object.keys(parsed.set), ...parsed.unset].find((field) => !SETTINGS_EDITABLE_FIELDS.includes(field))
+    if (invalidField !== undefined) {
+      return { ok: false, error: { code: 'invalid', message: '不可编辑字段: ' + invalidField, details: {} } }
+    }
+    const ops = [
+      ...Object.entries(parsed.set).map(([field, value]) => ({ op: 'set' as const, path: [field], value })),
+      ...parsed.unset.map((field) => ({ op: 'unset' as const, path: [field] })),
+    ]
+    if (ops.length === 0) return { ok: true, value: true }
+    try {
+      await provider.mutate(settingsNs, ops)
+      return { ok: true, value: true }
+    } catch (error) {
+      // fail-closed：跨字段约束（provider/model 成对、preset 重名、端点协议）由 settings 服务校验拒绝。
+      ctx.logger.warn('autogate: 设置写入被拒', error)
+      return { ok: false, error: { code: 'rejected', message: error instanceof Error ? error.message : String(error), details: {} } }
+    }
+  }
+
   // 跟随 DSH 设置语言：locale.preference（'zh'|'en'）由 dsh-client-locale 持久化在同一个
   // settings 文档里，服务端直接读取即可；据此让 L0 理由与 L1 分类 reason 使用对应语言。
   ctx.inject(['settings'], (sctx) => {
@@ -540,8 +624,10 @@ export function apply(ctx: Context, config: Config = {}): void {
   // 同步 ctx.get 会取到 undefined 导致端点静默缺失，须用 ctx.inject 等待服务就绪后再注册。
   ctx.inject(['connection'], (connCtx) => {
     const connection = connCtx.get('connection') as { rpc?: TrailRpcHost } | undefined
-    const disposeTrailRpc = connection?.rpc?.handle('/autogate', async (endpoint) => {
+    const disposeTrailRpc = connection?.rpc?.handle('/autogate', async (endpoint, payload) => {
       if (endpoint === 'trail') return { ok: true, value: trail.snapshot() }
+      if (endpoint === 'settings.get') return settingsGet()
+      if (endpoint === 'settings.write') return settingsWrite(payload)
       return { ok: false, error: { code: 'internal', message: 'unknown endpoint: ' + endpoint, details: {} } }
     }, { authority: 'loopback' })
     if (disposeTrailRpc !== undefined) {
