@@ -23,9 +23,19 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 
 ## 与同类插件的关键区别
 
-- **沙箱保持 workspace-write**：即使 LLM 误判放行，文件写入仍被沙箱限制在工作区（不同于使用 danger-full-access 的同类插件）。
+- **普通调用保持 workspace-write**：L0/L1 决策从不放宽沙箱，即使 L1 LLM 误判，普通文件写入仍被限制在工作区（不同于让每次调用都跑 danger-full-access 的同类插件）。**L2 escalation 通道是例外**：批准的提权会让那一次调用以请求的更宽沙箱运行——见安全免责声明。
 - **未识别工具默认走 LLM 分类而非放行**：但 `run_code` 作为代码执行容器直接放行——它内部的每次工具调用仍各自经过本策略与沙箱评估。
 - **fail-closed**：分类器异常 / 超时 / 无路由 / 格式错误一律拒绝，由被拒绝方（AI）视情况主动向用户发起人工审批。
+
+## ⚠️ 安全免责声明
+
+本插件是「减少人工审批的决策层，**不是安全边界**」。真正的执行边界仍是 DSH 的 workspace-write 沙箱及其提权审批。
+
+- L1 LLM 分类器是启发式的，可能误判（放行危险操作或拒绝安全操作）。fail-closed 减少误放行，但无法消除。
+- 静态路径检查（含 symlink realpath 加固）仍存在 TOCTOU 窗口：符号链接可能在检查通过后、写入前被重新指向。
+- **全自动（`auto`）模式**下 LLM 裁决为最终决定、不再人工弹窗——仅在可信环境使用。
+- 你对每一次被批准操作的最终效果负责。请查看审批轨迹，存疑时优先使用半自动（`auto-ask`）。
+- **L2 escalation 路径是一次性放宽**：LLM 批准沙箱提权后，那一次调用以请求的更宽沙箱（通常 full-access）运行，而非 workspace-write。它不影响其他调用，但确实是一次真实的临时扩权——不要把「沙箱保持 workspace-write」理解为覆盖提权。
 
 ## 安装
 
@@ -68,9 +78,21 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 4. 沙箱不拦截但语义危险的操作（模糊 shell、敏感路径读、动态目标、块设备、持久终端、git 状态变更、网络/数据库、工作区内受保护路径写）→ LLM 两态裁决（allow / deny）。
 5. LLM 拒绝或分类器异常后，AI 有两条人工审批通道（**仅半自动 `auto-ask` 模式**）：
    a. 用 ask_user_question 问用户确认操作合法，用户确认后重新执行，再过 LLM 审批放行；
-   b. 用 bash/pwsh 的 sandbox_permissions + justification 重试，走 DSH 内建沙箱提权（escalation）——本插件先过 LLM 判断：合理越界（用户明确授权）直接批准不弹窗，危险/不确定才人工弹窗。
+   b. 用 bash/pwsh 的 sandbox_permissions + justification 重试，走 DSH 内建沙箱提权（escalation）——本插件先过 LLM 判断：合理越界（用户明确授权）直接批准不弹窗，且那一次调用随后以请求的更宽沙箱（通常 full-access）运行；危险/不确定才人工弹窗。
 
    **全自动 `auto` 模式**：escalation 提权审批由 LLM 裁决为最终决定——allow 直接批准，deny / 分类器异常直接拒绝，不再人工弹窗。
+
+## 审批轨迹 UI
+
+插件生效时，DSH Web 界面右下角会出现一个悬浮的「审批轨迹」开关（注入 `shell.overlay` 槽位），仅当存在审批记录时显示。
+
+- 开关显示当前记录数，可展开/收起面板。
+- 面板列出**最近 50 条**记录（轨迹本身是进程级环形缓冲，上限 200 条，面板只显示最新一段）。
+- 每条记录显示决策层级（`L0` 确定性 / `L1` LLM / `L2` 人工）、决策结果（`allow` / `deny` / `ask`）与工具名，并带颜色条：绿色 = 放行、红色 = 拒绝、橙色 = 转人工。
+- 展开单条记录可查看操作摘要、拒绝/放行理由、工具 `callId`、本地时间与决策耗时。
+- 「定位」按钮把会话视图滚动到对应的那次工具调用。
+- 数据每 2 秒从插件 `trail` RPC 轮询一次（拉取失败保留上一份快照）。
+- 轨迹为进程级、仅内存保存：dsh 重启即清空，从不持久化。
 
 ## 目录结构
 
@@ -93,9 +115,11 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 
 ## 已知限制
 
-- 静态路径检查不跟随符号链接，工作区内 symlink 指向外部敏感路径时存在 TOCTOU 局限（第一步 `ln -s` 本身需经分类器）。
+- 路径包含判定基于真实身份（最深存在祖先经 realpath 解析），工作区内 symlink 不再绕过 L0/L1 分类；残余的 TOCTOU 窗口是「检查通过后、写入前」被重新指向的 symlink，仍由 workspace-write 沙箱兜底。
 - 删除工作区内文件直接放行，依赖 workspace-write 沙箱兜底；不做会话产物 artifact 追踪，工作区外的删除同样放行交由沙箱拦截 + escalation。
 - 分类器默认复用当前会话模型；若会话使用第三方 provider，分类请求会发往该 provider（已脱敏、限界）。
+- `preflight` 开关默认 `false`：普通工具调用完全依赖 workspace-write 沙箱，默认只跑硬 deny guard 与 escalation 预审；设 `preflight: true` 才会对每次调用加确定性规则 + LLM 分类。
+- 凭据外传检测是浅层文本模式（无法识别 base64 编码或分段的凭据）；把它当作绊线，而非保证。
 
 ## License
 

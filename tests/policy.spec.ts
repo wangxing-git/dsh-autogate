@@ -167,3 +167,27 @@ describe('hasSandboxEscalation', () => {
     expect(hasSandboxEscalation(null)).toBe(false)
   })
 })
+
+describe('assessTool symlink 逃逸加固', () => {
+  const base = { home: '/home/u', dshHome: '/home/u/.dsh' }
+  const linkTo = (link: string, target: string) => (p: string) =>
+    p === link ? target : p.startsWith(link + '/') ? target + p.slice(link.length) : p
+  it('write 工作区内 symlink 逃逸到区外普通路径 → 交给沙箱放行', () => {
+    const roots = resolveRoots('/ws', base, linkTo('/ws/link', '/external'))
+    const assessment = assessTool(execution('write', { file_path: '/ws/link/x', content: 'y' }), roots)
+    expect(assessment.decision).toBe('allow')
+    expect(assessment.reason).toContain('workspace-write sandbox will block it and offer escalation')
+  })
+  it('write 工作区内 symlink 逃逸到区外敏感配置 → 交 LLM', () => {
+    const roots = resolveRoots('/ws', base, linkTo('/ws/link', '/home/u'))
+    const assessment = assessTool(execution('write', { file_path: '/ws/link/.zshrc', content: 'y' }), roots)
+    expect(assessment.decision).toBe('ask')
+    expect(assessment.reason).toContain('sensitive config file')
+  })
+  it('read 工作区内 symlink 逃逸到区外敏感路径 → 交 LLM', () => {
+    const roots = resolveRoots('/ws', base, linkTo('/ws/link', '/home/u'))
+    const assessment = assessTool(execution('read', { file_path: '/ws/link/.ssh/id_rsa' }), roots)
+    expect(assessment.decision).toBe('ask')
+    expect(assessment.reason).toContain('critical path')
+  })
+})

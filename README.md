@@ -23,9 +23,19 @@ Both modes share the same L0 deterministic rules and L1 LLM classifier; the only
 
 ## Key differences from similar plugins
 
-- **Sandbox stays workspace-write**: even if the LLM misjudges and allows, file writes remain confined to the workspace by the sandbox (unlike similar plugins that use danger-full-access).
+- **Ordinary calls stay workspace-write**: L0/L1 decisions never widen the sandbox, so even if the L1 LLM misjudges, ordinary file writes stay confined to the workspace (unlike similar plugins that run every call with danger-full-access). The **L2 escalation channel is the exception**: an approved escalation runs that single call with the requested wider sandbox — see the security disclaimer.
 - **Unrecognized tools go to LLM classification by default instead of being allowed** — but `run_code` passes directly as a code-execution container; every tool call inside it is still evaluated by this policy and the sandbox.
 - **fail-closed**: classifier errors / timeouts / no route / malformed output always deny; the denied party (AI) proactively escalates to human approval as appropriate.
+
+## ⚠️ Security disclaimer
+
+This plugin is a **decision layer that reduces manual approvals — not a security boundary**. The real enforcement boundary remains DSH's workspace-write sandbox and its escalation approval.
+
+- The L1 LLM classifier is heuristic and can misjudge (allow a dangerous operation or deny a safe one). fail-closed reduces false allows but cannot eliminate them.
+- Static path checks (including the symlink realpath hardening) still have a TOCTOU window: a symlink can be retargeted after the check passes and before the actual write.
+- In **full-auto (`auto`) mode** the LLM decision is final with no human popup — use it only in environments you trust.
+- You remain responsible for the final effect of every approved operation. Review the approval trail, and prefer semi-auto (`auto-ask`) when in doubt.
+- The **L2 escalation path is a one-shot widening**: when the LLM approves a sandbox escalation, that single call runs with the requested wider sandbox (typically full-access), not workspace-write. It does not widen other calls, but it is a real one-time elevation — do not read "sandbox stays workspace-write" as covering escalations.
 
 ## Install
 
@@ -68,9 +78,21 @@ Configuration is wired through the DSH settings service (`ctx.settings`): write 
 4. Operations the sandbox doesn't intercept but are semantically dangerous (ambiguous shell, sensitive path reads, dynamic targets, block devices, persistent terminals, git state changes, network/database, writes to protected in-workspace paths) → LLM two-state decision (allow / deny).
 5. After an LLM deny or classifier error, the AI has two human-approval channels (**semi-auto `auto-ask` mode only**):
    a. use ask_user_question to confirm the operation is legitimate, then re-run after the user confirms and pass LLM approval again;
-   b. retry with sandbox_permissions + justification on bash/pwsh to go through DSH's built-in sandbox escalation — this plugin runs the LLM first: a reasonable escalation (explicitly authorized by the user) is approved directly without a popup; dangerous/uncertain cases show a human popup.
+   b. retry with sandbox_permissions + justification on bash/pwsh to go through DSH's built-in sandbox escalation — this plugin runs the LLM first: a reasonable escalation (explicitly authorized by the user) is approved directly without a popup, and that single call then runs with the requested wider sandbox (typically full-access); dangerous/uncertain cases show a human popup.
 
    **Full-auto `auto` mode**: escalation approval is decided by the LLM as final — allow approves directly, deny / classifier error denies directly, no human popup.
+
+## Approval trail UI
+
+While the plugin is active, a floating **Approval trail** toggle appears in the bottom-right corner of the DSH web UI (injected into the `shell.overlay` slot). It is only visible once at least one decision has been recorded.
+
+- The toggle shows the current record count and expands/collapses the panel.
+- The panel lists the **most recent 50 records** (the trail itself is a process-level ring buffer capped at 200; the panel shows the newest window).
+- Each entry shows the decision layer (`L0` deterministic / `L1` LLM / `L2` human), the decision (`allow` / `deny` / `ask`), and the tool name, with a color bar: green = allow, red = deny, orange = ask.
+- Expanding an entry reveals the one-line operation summary, the deny/allow reason, the tool `callId`, the local time, and the decision duration.
+- The **Locate (定位)** button scrolls the session view to the corresponding tool call.
+- Data is polled from the plugin's `trail` RPC every 2 seconds (the last snapshot is kept on failure).
+- The trail is process-level and in-memory only: it resets when dsh restarts and is never persisted.
 
 ## Directory structure
 
@@ -93,9 +115,11 @@ Configuration is wired through the DSH settings service (`ctx.settings`): write 
 
 ## Known limitations
 
-- Static path checks do not follow symlinks; a symlink inside the workspace pointing to a sensitive external path has a TOCTOU limitation (the initial `ln -s` itself must pass the classifier).
+- Path containment is evaluated on real identity (the deepest existing ancestor is resolved through realpath), so a symlink inside the workspace no longer bypasses L0/L1 classification; the remaining TOCTOU window is a symlink retargeted between the check and the actual write, which the workspace-write sandbox still catches.
 - Deleting files inside the workspace is allowed directly, relying on the workspace-write sandbox as the fallback; session artifact tracking is not performed, and deletes outside the workspace also pass and rely on sandbox interception + escalation.
 - The classifier defaults to reusing the current session model; if the session uses a third-party provider, classification requests go to that provider (sanitized and bounded).
+- The `preflight` switch defaults to `false`: ordinary tool calls rely entirely on the workspace-write sandbox, and only the hard-deny guard and the escalation pre-approval run by default. Set `preflight: true` to add deterministic rules + LLM classification on every call.
+- Credential-exfiltration detection is a shallow text pattern (it cannot see base64-encoded or chunked secrets); treat it as a tripwire, not a guarantee.
 
 ## License
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hardDestructiveTargetReason, isCriticalPath, isFilesystemRoot, isProtectedProjectPath, isSensitiveConfigFile, isWithin, normalizePath, resolveRoots } from '../src/paths.js'
+import { hardDestructiveTargetReason, isCriticalPath, isFilesystemRoot, isProtectedProjectPath, isSensitiveConfigFile, isWithin, globStaticPrefix, normalizePath, resolveRealPath, resolveRoots } from '../src/paths.js'
 
 describe('normalizePath', () => {
   it('展开 ~ 为家目录', () => {
@@ -119,5 +119,52 @@ describe('normalizePath win32 与 isWithin 风格', () => {
   })
   it('win32 同风格 isWithin 返回 true', () => {
     expect(isWithin('c:\\ws', 'c:\\ws\\sub')).toBe(true)
+  })
+})
+
+describe('resolveRealPath', () => {
+  it('目标已存在：直接返回 realpath 结果', () => {
+    const resolveReal = (p: string) => (p === '/ws/link' ? '/etc' : p)
+    expect(resolveRealPath('/ws/link', resolveReal)).toBe('/etc')
+  })
+  it('目标不存在但祖先存在：解析最深存在祖先并拼回后缀', () => {
+    const resolveReal = (p: string) => {
+      if (p === '/ws/link') return '/etc'
+      throw new Error('ENOENT')
+    }
+    expect(resolveRealPath('/ws/link/sub/new.txt', resolveReal)).toBe('/etc/sub/new.txt')
+  })
+  it('全部祖先都不存在：保守原样返回（不因解析失败而放宽容忍）', () => {
+    const resolveReal = () => { throw new Error('ENOENT') }
+    expect(resolveRealPath('/nope/a/b', resolveReal)).toBe('/nope/a/b')
+  })
+})
+
+describe('hardDestructiveTargetReason symlink 逃逸加固', () => {
+  const base = { home: '/home/u', dshHome: '/home/u/.dsh' }
+  const linkTo = (link: string, target: string) => (p: string) =>
+    p === link ? target : p.startsWith(link + '/') ? target + p.slice(link.length) : p
+  it('工作区内 symlink 指向系统关键路径 → 拒绝', () => {
+    const roots = resolveRoots('/ws', base, linkTo('/ws/etc', '/etc'))
+    expect(hardDestructiveTargetReason('/ws/etc/passwd', roots)).toContain('critical')
+  })
+  it('工作区内 symlink 指向家目录根 → 拒绝', () => {
+    const roots = resolveRoots('/ws', base, linkTo('/ws/home', '/home/u'))
+    expect(hardDestructiveTargetReason('/ws/home', roots)).toContain('user home root')
+  })
+  it('工作区内 symlink 指向 DSH_HOME → 拒绝', () => {
+    const roots = resolveRoots('/ws', base, linkTo('/ws/dsh', '/home/u/.dsh'))
+    expect(hardDestructiveTargetReason('/ws/dsh/settings.yaml', roots)).toContain('DSH_HOME')
+  })
+})
+
+describe('globStaticPrefix', () => {
+  it('提取 glob 元字符之前的静态前缀', () => {
+    expect(globStaticPrefix('/*')).toBe('/')
+    expect(globStaticPrefix('/etc/*')).toBe('/etc/')
+    expect(globStaticPrefix('~/.*')).toBe('~/.')
+  })
+  it('无 glob 目标原样返回', () => {
+    expect(globStaticPrefix('/ws/file.txt')).toBe('/ws/file.txt')
   })
 })

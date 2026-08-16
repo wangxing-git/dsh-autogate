@@ -30,7 +30,7 @@ src/
   policy.ts       工具级确定性规则（L0）与危险识别
   shell.ts        bash/pwsh 静态分析（L0 硬 deny + 危险 shell 识别）
   classifier.ts   LLM 分类器（DSH 内部 LLM / 可选 HTTP 端点）+ 脱敏 + 系统提示词
-  paths.ts        路径规范化、危险路径判定、工作区根解析
+  paths.ts        路径规范化（含 symlink realpath 加固）、危险路径判定、工作区根解析
   trail.ts        审批轨迹（进程级环形缓冲，只增不持久化）
   types.ts        共享类型（Assessment / ClassifierInput / ClassifierDecision / SafetyClassifier）
   client.tsx      设置 UI 卡片 + 审批轨迹面板（客户端 bundle）

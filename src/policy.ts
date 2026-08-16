@@ -120,10 +120,12 @@ export function assessTool(exec: Readonly<ToolExecution>, roots: PolicyRoots): A
     const path = pathArgument(args)
     if (path === undefined) return allow('read-only project inspection')
     const normalized = normalizePath(path, roots.workspace, roots.home)
-    if (isWithin(roots.workspace, normalized)) return allow('read-only project inspection inside the workspace')
+    // symlink 加固：以真实落点判定，防止工作区内 symlink 逃逸读取敏感路径时被误放行。
+    const real = roots.resolveReal(normalized)
+    if (isWithin(roots.workspace, real)) return allow('read-only project inspection inside the workspace')
     // 工作区外读：敏感路径（凭据/系统目录）交 LLM 审查，普通路径直接放行（只读无副作用，workspace-write 沙箱本就不限读）。
-    return isCriticalPath(normalized, roots)
-      ? classify('reading a critical path outside the workspace requires semantic review: ' + normalized)
+    return isCriticalPath(real, roots)
+      ? classify('reading a critical path outside the workspace requires semantic review: ' + real)
       : allow('read-only inspection of a non-critical path outside the workspace')
   }
 
@@ -131,15 +133,17 @@ export function assessTool(exec: Readonly<ToolExecution>, roots: PolicyRoots): A
     const path = pathArgument(args)
     if (path === undefined) return allow(name + ' target path is missing; workspace-write sandbox applies')
     const normalized = normalizePath(path, roots.workspace, roots.home)
+    // symlink 加固：以真实落点判定，工作区内 symlink 逃逸到区外时不再误判为“区内编辑”。
+    const real = roots.resolveReal(normalized)
     // 工作区内受保护路径（.git 等）交 LLM；工作区外敏感 shell/凭据配置文件同样交 LLM，其余直接放行交给沙箱拦截 + escalation。
-    if (isWithin(roots.workspace, normalized)) {
-      return isProtectedProjectPath(normalized, roots)
-        ? classify('mutation of protected project path requires semantic review: ' + normalized)
+    if (isWithin(roots.workspace, real)) {
+      return isProtectedProjectPath(real, roots)
+        ? classify('mutation of protected project path requires semantic review: ' + real)
         : allow('routine project-local file edit')
     }
     // 工作区外的敏感 shell / 凭据配置文件（.zshrc/.bashrc/.gitconfig/.env 等）提前交 LLM 审查，不再完全依赖沙箱拦截 + escalation 兜底。
-    if (isSensitiveConfigFile(path, roots)) {
-      return classify('mutation of a sensitive config file outside the workspace requires semantic review: ' + normalized)
+    if (isSensitiveConfigFile(real, roots)) {
+      return classify('mutation of a sensitive config file outside the workspace requires semantic review: ' + real)
     }
     return allow('mutation outside the workspace; workspace-write sandbox will block it and offer escalation')
   }

@@ -1,5 +1,5 @@
 import { basename } from 'node:path'
-import { hardDestructiveTargetReason, isWithin, normalizePath, type PolicyRoots } from './paths.js'
+import { globStaticPrefix, hardDestructiveTargetReason, isWithin, normalizePath, type PolicyRoots } from './paths.js'
 import type { Assessment } from './types.js'
 
 export type ShellKind = 'bash' | 'pwsh'
@@ -24,6 +24,12 @@ const PRIVILEGE_ESCALATION = /(?:^|[\s;&|])(?:sudo|doas|su)(?:\s|$)/i
 
 /** 自毁 / 系统级破坏命令。 */
 const SELF_DESTRUCTIVE = /(?:^|[\s;&|])(?:killall|pkill|taskkill|Stop-Process|shutdown|reboot|halt|poweroff|mkfs|format-volume|clear-disk)(?:\s|$)/i
+
+/** 提权命令名（tokenize 后识别，覆盖 s'u'do 等引号拼接绕过）。 */
+const PRIVILEGE_ESCALATION_COMMANDS = new Set(['sudo', 'doas', 'su'])
+
+/** 自毁 / 系统级破坏命令名（tokenize 后识别，覆盖引号拼接绕过）。 */
+const SELF_DESTRUCTIVE_COMMANDS = new Set(['killall', 'pkill', 'taskkill', 'stop-process', 'shutdown', 'reboot', 'halt', 'poweroff', 'mkfs', 'format-volume', 'clear-disk'])
 
 /** 凭据 / 私钥敏感标记（用于外传检测）。 */
 const SENSITIVE_MARKER = /(?:\.ssh[\\/]|\.gnupg[\\/]|\.aws[\\/]|\.kube[\\/]|\.credentials\.yaml|id_(?:rsa|ed25519)|(?:API|AUTH|ACCESS|SECRET)[_-]?KEY|TOKEN|PASSWORD)/i
@@ -106,7 +112,9 @@ function looksLikePath(token: string): boolean {
 function routinePaths(paths: string[], roots: PolicyRoots): boolean {
   return paths.every((path) => {
     const normalized = normalizePath(path, roots.workspace, roots.home)
-    return isWithin(roots.workspace, normalized) || roots.tempRoots.some(root => isWithin(root, normalized))
+    // symlink 加固：以真实落点判定，防止工作区内 symlink 逃逸到区外敏感路径被误判为“区内只读”。
+    const real = roots.resolveReal(normalized)
+    return isWithin(roots.workspace, real) || roots.tempRoots.some(root => isWithin(root, real))
   })
 }
 
@@ -134,14 +142,17 @@ function assessDestructive(name: string, tokens: string[], roots: PolicyRoots): 
   }
   if (targets.length === 0) return allow('destructive target could not be determined; workspace-write sandbox applies')
   for (const target of targets) {
-    const reason = hardDestructiveTargetReason(target, roots)
+    // glob 目标：先对其静态前缀做危险判定，防止 /*、/etc/*、~/*、~/.* 这类绕过精确路径匹配。
+    const reason = hardDestructiveTargetReason(globStaticPrefix(target), roots)
     if (reason !== undefined) return deny('destructive operation targets ' + reason)
   }
   // dd 是块设备级操作，参数形如 if=/of=，静态路径判定不可靠，交 LLM 分类。
   if (name === 'dd') return classify('dd block-device operation requires independent classification')
   const confined = WORKSPACE_CONFINED_DESTRUCTIVE.has(name) && targets.every((target) => {
     const normalized = normalizePath(target, roots.workspace, roots.home)
-    return isWithin(roots.workspace, normalized) || roots.tempRoots.some(root => isWithin(root, normalized))
+    // symlink 加固：以真实落点判定，工作区内 symlink 逃逸到区外时不再按“区内删除”放行。
+    const real = roots.resolveReal(normalized)
+    return isWithin(roots.workspace, real) || roots.tempRoots.some(root => isWithin(root, real))
   })
   if (confined) return allow('destructive operation confined to the workspace or temporary area; workspace-write sandbox applies')
   return allow('destructive operation outside the workspace; workspace-write sandbox will block it and offer escalation')
@@ -167,6 +178,10 @@ export function assessShell(source: string, shell: ShellKind, roots: PolicyRoots
   if (rawName === '') return allow('command line contains no command')
   if (/[\$\x60]/.test(rawName)) return allow('command name is produced by a dynamic expansion; workspace-write sandbox applies')
   const name = commandName(rawName)
+
+  // 提权/自毁命令：即使原始正则被引号拼接（如 s'u'do）绕过，tokenize 后仍能确定性拒绝。
+  if (PRIVILEGE_ESCALATION_COMMANDS.has(name)) return deny('privilege escalation is not permitted by auto mode')
+  if (SELF_DESTRUCTIVE_COMMANDS.has(name)) return deny('self-destructive or system-level command is not permitted')
 
   if (isNestedInterpreter(name, tokens)) {
     if (/\b(?:rm|rmdir|unlink|shred|os\.(?:remove|unlink)|shutil\.rmtree|file\.delete)\b/.test(compact)) {

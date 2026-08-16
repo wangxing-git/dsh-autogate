@@ -154,3 +154,41 @@ describe('assessShell 网络与数据库命令', () => {
     expect(assessShell('kubectl get pods', 'bash', roots).decision).toBe('ask')
   })
 })
+
+describe('assessShell symlink 逃逸加固', () => {
+  const base = { home: '/home/u', dshHome: '/home/u/.dsh' }
+  const linkTo = (link: string, target: string) => (p: string) =>
+    p === link ? target : p.startsWith(link + '/') ? target + p.slice(link.length) : p
+  it('rm 工作区内 symlink 逃逸到区外 → 交给沙箱放行', () => {
+    const roots = resolveRoots('/ws', base, linkTo('/ws/link', '/external'))
+    const assessment = assessShell('rm /ws/link', 'bash', roots)
+    expect(assessment.decision).toBe('allow')
+    expect(assessment.reason).toContain('workspace-write sandbox will block it and offer escalation')
+  })
+  it('cat 工作区内 symlink 逃逸到区外敏感路径 → 交 LLM', () => {
+    const roots = resolveRoots('/ws', base, linkTo('/ws/link', '/home/u'))
+    const assessment = assessShell('cat /ws/link/.ssh/id_rsa', 'bash', roots)
+    expect(assessment.decision).toBe('ask')
+  })
+})
+
+describe('assessShell glob 与编码绕过加固', () => {
+  it('rm -rf /* 命中文件系统根前缀 → 拒绝', () => {
+    expect(assessShell('rm -rf /*', 'bash', roots).decision).toBe('deny')
+  })
+  it('rm -rf /etc/* 命中关键路径前缀 → 拒绝', () => {
+    expect(assessShell('rm -rf /etc/*', 'bash', roots).decision).toBe('deny')
+  })
+  it('rm -rf ~/.* 命中家目录前缀 → 拒绝', () => {
+    expect(assessShell('rm -rf ~/.*', 'bash', roots).decision).toBe('deny')
+  })
+  it('rm -rf /ws/build/* 工作区内 glob 放行', () => {
+    expect(assessShell('rm -rf /ws/build/*', 'bash', roots).decision).toBe('allow')
+  })
+  it("s'u'do whoami 引号拼接提权 → 拒绝", () => {
+    expect(assessShell("s'u'do whoami", 'bash', roots).decision).toBe('deny')
+  })
+  it("k'i'llall node 引号拼接自毁 → 拒绝", () => {
+    expect(assessShell("k'i'llall node", 'bash', roots).decision).toBe('deny')
+  })
+})
