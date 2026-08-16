@@ -14,6 +14,8 @@ export interface ClassifierInput {
   policyReason: string
   /** 最近的直接人类消息（唯一授权依据，已脱敏）。 */
   trustedUserMessages: string[]
+  /** 每条用户消息紧邻前的 AI 提议文本（不可信，仅用于消解指代，已脱敏、限界）；与 trustedUserMessages 同序配对，无上下文时为 ''。 */
+  proposalContexts?: string[]
   /** 当前会话的 provider/model 路由（供 DSH 内部分类器复用）。 */
   route?: { provider: string; model: string }
 }

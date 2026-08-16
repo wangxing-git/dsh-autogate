@@ -161,4 +161,16 @@ describe('Config schema 默认值', () => {
   it('preflight 默认关闭（false）', () => {
     expect(Config({}).preflight).toBe(false)
   })
+
+  it('proposalContextMaxMessageLen 默认 10', () => {
+    expect(Config({}).proposalContextMaxMessageLen).toBe(10)
+  })
+
+  it('proposalContextMaxChars 默认 400', () => {
+    expect(Config({}).proposalContextMaxChars).toBe(400)
+  })
+
+  it('proposalContextMaxTotalChars 默认 2000', () => {
+    expect(Config({}).proposalContextMaxTotalChars).toBe(2000)
+  })
 })

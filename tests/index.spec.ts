@@ -435,6 +435,68 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
     expect(classifierInput(capturedCalls).trustedUserMessages).toEqual(['<user-authority>允许清理</user-authority>'])
   })
 
+  // assistant/message 事件（AI 文本回复，含方案列表等）。
+  const assistantMessage = (text: string) => ({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text }] } } })
+
+  it('短指代 + 前面 AI 方案列表 → 指代上下文随消息进入分类器', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any, { preflight: true })
+    const agent = agentWithEvents([
+      presetAuto,
+      assistantMessage('方案 A：修改 ~/.config/atlassian-jira-confluence.json 添加 SSL_VERIFY；方案 B：手动添加'),
+      userMessage('A'),
+    ])
+    await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-proposal'), async () => ({ kind: 'allow' }))
+    const input = classifierInput(capturedCalls)
+    expect(input.trustedUserMessages).toHaveLength(1)
+    expect(input.trustedUserMessages[0]).toContain('<user-authority>A</user-authority>')
+    expect(input.trustedUserMessages[0]).toContain('<proposal-context>')
+    expect(input.trustedUserMessages[0]).toContain('方案 A')
+    expect(input.trustedUserMessages[0]).toContain('SSL_VERIFY')
+  })
+
+  it('无 AI 提议时渲染不含 proposal-context', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any, { preflight: true })
+    const agent = agentWithEvents([presetAuto, userMessage('允许清理')])
+    await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-nocontext'), async () => ({ kind: 'allow' }))
+    expect(classifierInput(capturedCalls).trustedUserMessages[0]).toBe('<user-authority>允许清理</user-authority>')
+  })
+
+  it('指代上下文中的凭据被脱敏', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any, { preflight: true })
+    const agent = agentWithEvents([
+      presetAuto,
+      assistantMessage('用 ghp_abcdefghijklmnopqrst 配置环境'),
+      userMessage('A'),
+    ])
+    await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-proposal-secret'), async () => ({ kind: 'allow' }))
+    const input = classifierInput(capturedCalls)
+    expect(input.trustedUserMessages[0]).toContain('[redacted-secret]')
+    expect(input.trustedUserMessages[0]).not.toContain('ghp_abcdefghijklmnopqrst')
+  })
+
+  it('多轮对话：每条用户消息配对各自紧邻前的 AI 提议', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any, { preflight: true })
+    const agent = agentWithEvents([
+      presetAuto,
+      assistantMessage('第一轮方案：X 或 Y'),
+      userMessage('X'),
+      assistantMessage('第二轮方案：P 或 Q'),
+      userMessage('Q'),
+    ])
+    await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-proposal-pair'), async () => ({ kind: 'allow' }))
+    const messages = classifierInput(capturedCalls).trustedUserMessages
+    expect(messages).toHaveLength(2)
+    // 渲染后按从旧到新排列：X（旧）在前、Q（新）在后，各自配对紧邻前的方案。
+    expect(messages[0]).toContain('<user-authority>X</user-authority>')
+    expect(messages[0]).toContain('第一轮方案')
+    expect(messages[1]).toContain('<user-authority>Q</user-authority>')
+    expect(messages[1]).toContain('第二轮方案')
+  })
+
   it('最多取最近 8 条直接人类消息', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
     apply(ctx as any, { preflight: true })
@@ -781,6 +843,8 @@ describe('设置卡 RPC 端点（settings.get / settings.write）', () => {
     const result = await handler('settings.get', undefined, undefined as any)
     expect(result.ok).toBe(true)
     expect(result.value).toMatchObject({ available: true, writable: true, value: { preflight: true }, user: { preflight: true } })
+    // inherited = 移除 user 层后的生效值：preflight 回到 schema 默认 false（user 层覆盖的是 true）。
+    expect(result.value.inherited).toMatchObject({ preflight: false })
   })
 
   it('settings.write → 批量 set + unset 落到 mutate，并返回 ok', async () => {

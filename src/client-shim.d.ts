@@ -9,6 +9,8 @@ declare module 'react/jsx-runtime' {
 
 declare module 'react' {
   export function useState<T>(initial: T | (() => T)): [T, (next: T | ((prev: T) => T)) => void]
+  export function useEffect(effect: () => void | (() => void), deps?: readonly unknown[]): void
+  export function useRef<T>(initial: T): { current: T }
 }
 
 declare module '@deepseek-ai/dsh-client-runtime/client' {

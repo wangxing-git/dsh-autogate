@@ -14,6 +14,17 @@ export function textField(field: string, multiline = false) {
   }
 }
 
+/** 带候选下拉的文本字段：选项仅供快速选择，仍允许输入任意自定义值（datalist 组合框）；候选通常由服务端模型目录动态注入。 */
+export function selectField(field: string, options: readonly string[] = []) {
+  return {
+    field,
+    multiline: false,
+    options,
+    format: (value: unknown) => typeof value === 'string' ? value : '',
+    parse: (text: string) => text === '' ? { kind: 'clear' as const } : { kind: 'set' as const, value: text },
+  }
+}
+
 export function numberField(field: string) {
   return {
     field,
@@ -48,8 +59,10 @@ export class CardForm {
   specs: Map<string, any>
   staged = new Map<string, { text: string, clear: boolean }>()
   listeners = new Set<() => void>()
+  dynamicOptions = new Map<string, readonly string[]>()
   saving = false
   failed = false
+  saved = false
 
   constructor(scope: any, specs: any[]) {
     this.scope = scope
@@ -68,10 +81,11 @@ export class CardForm {
     return {
       available: snapshot.status === 'ready',
       writable: snapshot.writable,
-      dirty: this.staged.size > 0,
-      invalid: false,
+      dirty: [...this.staged.entries()].some(([field, staged]) => this.fieldChanged(field, staged)),
+      invalid: [...this.staged.entries()].some(([field, staged]) => this.fieldInvalid(field, staged)),
       saving: this.saving,
       failed: this.failed,
+      saved: this.saved,
     }
   }
 
@@ -82,21 +96,49 @@ export class CardForm {
     const value = snapshot.value?.[field]
     const user = snapshot.user
     const stored = user !== undefined && Object.hasOwn(user, field)
+    const options = this.dynamicOptions.get(field) ?? spec.options ?? []
     if (staged === undefined) {
-      return { text: spec.format(value), overridden: stored, invalid: false }
+      return { text: spec.format(value), overridden: stored, invalid: false, dirty: false, options }
     }
-    if (staged.clear) return { text: staged.text, overridden: false, invalid: false }
+    if (staged.clear) {
+      // 重置后即时预览「移除 user 层后的生效值」（schema 默认 + base），而非留空。
+      const inherited = snapshot.inherited?.[field] ?? value
+      return { text: spec.format(inherited), overridden: false, invalid: false, dirty: this.fieldChanged(field, staged), options }
+    }
     const parsed = spec.parse(staged.text)
-    return { text: staged.text, overridden: true, invalid: parsed === undefined }
+    return { text: staged.text, overridden: stored, invalid: parsed === undefined, dirty: this.fieldChanged(field, staged), options }
+  }
+
+  /** 判断某字段的 staged 草稿相对已保存值是否真正变化：输入与原值相同不算变化，重置仅在 user 层有值时算变化。 */
+  private fieldChanged(field: string, staged: { text: string; clear: boolean }): boolean {
+    const snapshot = this.scope.getSnapshot()
+    if (staged.clear) {
+      return snapshot.user !== undefined && Object.hasOwn(snapshot.user, field)
+    }
+    const parsed = this.specs.get(field)?.parse(staged.text)
+    if (parsed === undefined || parsed.kind !== 'set') return true
+    return !Object.is(parsed.value, snapshot.value?.[field])
+  }
+
+  /** 判断某字段的 staged 草稿是否非法（解析失败）：非法输入应禁用保存按钮，而非等写入被拒才提示失败。 */
+  private fieldInvalid(field: string, staged: { text: string; clear: boolean }): boolean {
+    if (staged.clear) return false
+    return this.specs.get(field)?.parse(staged.text) === undefined
   }
 
   actions() {
     return {
-      edit: (field: string, text: string) => { this.staged.set(field, { text, clear: false }); this.publish() },
-      resetField: (field: string) => { this.staged.set(field, { text: '', clear: true }); this.publish() },
+      edit: (field: string, text: string) => { this.staged.set(field, { text, clear: false }); this.saved = false; this.publish() },
+      resetField: (field: string) => { this.staged.set(field, { text: '', clear: true }); this.saved = false; this.publish() },
       save: () => this.save(),
-      discard: () => { this.staged.clear(); this.failed = false; this.publish() },
+      discard: () => { this.staged.clear(); this.failed = false; this.saved = false; this.publish() },
     }
+  }
+
+  /** 动态注入某字段的下拉候选（如从服务端模型目录拉取）；重新发布快照触发重渲染。 */
+  setOptions(field: string, options: readonly string[]) {
+    this.dynamicOptions.set(field, options)
+    this.publish()
   }
 
   async save() {
@@ -110,6 +152,7 @@ export class CardForm {
     const unset: string[] = []
     let landed = true
     for (const [field, staged] of this.staged) {
+      if (!this.fieldChanged(field, staged)) continue
       const spec = this.specs.get(field)
       if (staged.clear) {
         unset.push(field)
@@ -122,7 +165,10 @@ export class CardForm {
     if (landed && (Object.keys(set).length > 0 || unset.length > 0)) {
       landed = await this.scope.write(set, unset)
     }
-    if (landed) this.staged.clear()
+    if (landed) {
+      this.staged.clear()
+      this.saved = true
+    }
     this.saving = false
     this.failed = !landed
     this.publish()
@@ -138,13 +184,13 @@ export class RpcSettingsSource {
 
   constructor(rpc: any) {
     this.rpc = rpc
-    this.store = createSnapshotStore({ status: 'loading', writable: false, value: {}, user: {} })
+    this.store = createSnapshotStore({ status: 'loading', writable: false, value: {}, user: {}, inherited: {} })
     void this.refresh()
   }
 
   async refresh() {
     if (this.rpc === undefined || typeof this.rpc.call !== 'function') {
-      this.store.set({ status: 'unavailable', writable: false, value: {}, user: {} })
+      this.store.set({ status: 'unavailable', writable: false, value: {}, user: {}, inherited: {} })
       return
     }
     try {
@@ -155,9 +201,10 @@ export class RpcSettingsSource {
           writable: result.value.writable === true,
           value: result.value.value ?? {},
           user: result.value.user ?? {},
+          inherited: result.value.inherited ?? {},
         })
       } else {
-        this.store.set({ status: 'unavailable', writable: false, value: {}, user: {} })
+        this.store.set({ status: 'unavailable', writable: false, value: {}, user: {}, inherited: {} })
       }
     } catch {
       // 拉取失败保持上一份快照
@@ -266,6 +313,8 @@ export const zh = {
   saving: '保存中…',
   discard: '放弃',
   saveFailed: '保存失败',
+  saved: '已保存',
+  dirtyLabel: '未保存的修改',
   overridden: '已覆盖',
   reset: '重置',
   invalid: '无效输入',
@@ -291,6 +340,12 @@ export const zh = {
   classifierMaxOutputTokensHint: '64–4096',
   classifierRetry: '解析失败重试',
   classifierRetryHint: '分类器输出解析失败时静默重试一次（默认开启）',
+  proposalContextMaxMessageLen: '指代消息长度阈值',
+  proposalContextMaxMessageLenHint: '长度不超过该值（字符）的用户消息才携带 AI 提议上下文用于消解指代；默认 10',
+  proposalContextMaxChars: '单条上下文上限',
+  proposalContextMaxCharsHint: '单条 AI 提议上下文的最大字符数（64–4000）；默认 400',
+  proposalContextMaxTotalChars: '上下文总预算',
+  proposalContextMaxTotalCharsHint: '多条消息的 AI 提议上下文合计字符上限（64–8000）；默认 2000',
   // 审批轨迹面板
   trailTitle: '审批轨迹',
   trailCollapse: '收起',
@@ -313,6 +368,8 @@ export const en = {
   saving: 'Saving…',
   discard: 'Discard',
   saveFailed: 'Save failed',
+  saved: 'Saved',
+  dirtyLabel: 'Unsaved changes',
   overridden: 'Overridden',
   reset: 'Reset',
   invalid: 'Invalid',
@@ -338,6 +395,12 @@ export const en = {
   classifierMaxOutputTokensHint: '64–4096',
   classifierRetry: 'Retry on parse failure',
   classifierRetryHint: 'Retry once when classifier output fails to parse (default on)',
+  proposalContextMaxMessageLen: 'Reference message max length',
+  proposalContextMaxMessageLenHint: 'Only user messages up to this length (chars) carry the AI proposal context for reference resolution; default 10',
+  proposalContextMaxChars: 'Per-context max chars',
+  proposalContextMaxCharsHint: 'Max chars for a single AI proposal context (64–4000); default 400',
+  proposalContextMaxTotalChars: 'Context total budget',
+  proposalContextMaxTotalCharsHint: 'Total chars across all AI proposal contexts (64–8000); default 2000',
   // 审批轨迹面板
   trailTitle: 'Approval trail',
   trailCollapse: 'Collapse',

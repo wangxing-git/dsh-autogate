@@ -46,6 +46,9 @@ const SETTINGS_EDITABLE_FIELDS: readonly string[] = [
   'classifierTimeoutMs',
   'classifierMaxOutputTokens',
   'classifierRetry',
+  'proposalContextMaxMessageLen',
+  'proposalContextMaxChars',
+  'proposalContextMaxTotalChars',
 ]
 
 /** 校验 settings.write 的载荷形状：{ set: Record<string, unknown>, unset: string[] }。 */
@@ -79,6 +82,12 @@ export interface Config {
   readonly classifierMaxOutputTokens?: number
   /** 分类器输出解析失败时静默重试一次；默认开启（temperature 0 下偶发格式抖动）。 */
   readonly classifierRetry?: boolean
+  /** 短指代消息长度阈值（字符）：长度不超过该值的直接人类消息才携带 AI 提议上下文用于消解指代；默认 10。 */
+  readonly proposalContextMaxMessageLen?: number
+  /** 单条 AI 提议上下文上限（字符）；默认 400。 */
+  readonly proposalContextMaxChars?: number
+  /** AI 提议上下文总预算（字符）：多条消息的上下文合计不超过该值；默认 2000。 */
+  readonly proposalContextMaxTotalChars?: number
   /** 沙盒前拦截判断开关：true 执行普通 L0 规则 + LLM 分类，false 完全依赖沙盒（硬 deny 与提权审批不受影响）。 */
   readonly preflight?: boolean
   /** 审批轨迹浮窗开关（默认显示）：关闭则不显示右下角浮窗，且客户端停止轮询轨迹接口。 */
@@ -99,6 +108,9 @@ export const Config: z<Config> = z.object({
   classifierTimeoutMs: z.number().default(8_000).min(100).max(60_000).description('分类器超时毫秒数，超时 fail-closed'),
   classifierMaxOutputTokens: z.number().default(1_024).min(64).max(4_096).description('分类器输出 token 上限'),
   classifierRetry: z.boolean().default(true).description('分类器输出解析失败时静默重试一次；默认开启'),
+  proposalContextMaxMessageLen: z.natural().default(10).min(1).max(200).description('短指代消息长度阈值（字符）：长度不超过该值才携带 AI 提议上下文；默认 10'),
+  proposalContextMaxChars: z.natural().default(400).min(64).max(4_000).description('单条 AI 提议上下文上限（字符）；默认 400'),
+  proposalContextMaxTotalChars: z.natural().default(2_000).min(64).max(8_000).description('AI 提议上下文总预算（字符）；默认 2000'),
   preflight: z.boolean().default(false).description('沙盒前拦截判断开关：开启执行确定性规则与 LLM 分类，关闭则完全依赖沙盒策略（硬 deny 与提权审批不受影响）'),
   showTrail: z.boolean().default(true).description('审批轨迹浮窗开关：默认显示；关闭则不显示浮窗且客户端停止轮询轨迹接口'),
   fullAutoPresetName: z.string().default(AUTO_PERMISSION_PRESET).description('全自动权限预设键（默认 auto）：该预设下审批不再人工弹窗，LLM 裁决为最终决定'),
@@ -253,21 +265,52 @@ function modelRoute(agent: ToolExecution['agent']): Pick<LlmCallConfig, 'provide
  * 审批上下文的「授权依据」：最近的直接人类消息，以及 ask_user_question 的问答对。
  * 问答对中问题是 AI 提问（提供上下文），回答是用户选择（授权本身）；两者一并脱敏、
  * 限界后进入分类器，使分类器能识别「用户已通过问答明确授权」而不再重复人工弹窗。
+ *
+ * 除授权文本外，还返回每条直接人类消息紧邻前的 AI 提议文本（contexts，不可信）：
+ * 当用户用极短指代（如「A」「第一个」）回应 AI 的方案列表时，分类器凭该上下文消解指代，
+ * 判断用户是否明确授权了某个具体操作。上下文仅用于消解指代，绝不作授权依据。
  */
-function trustedUserMessages(authority: ToolExecution['agent']): string[] {
-  if (authority === undefined) return []
-  const messages: string[] = []
-  let remaining = 4_000
+/** 提案上下文限界参数：由 Config 注入，避免硬编码。 */
+interface ProposalContextLimits {
+  /** 短指代消息长度阈值（字符）：长度不超过该值才携带 AI 提议上下文。 */
+  maxMessageLen: number
+  /** 单条 AI 提议上下文上限（字符）。 */
+  maxChars: number
+  /** AI 提议上下文总预算（字符）。 */
+  maxTotalChars: number
+}
 
-  // 第一阶段：建立 ask_user_question 的 callId → 问题文本 映射（问题随 tool/call 落盘）。
+function trustedUserMessages(authority: ToolExecution['agent'], limits: ProposalContextLimits): { messages: string[]; contexts: string[] } {
+  if (authority === undefined) return { messages: [], contexts: [] }
+  const messages: string[] = []
+  const contexts: string[] = []
+  let remaining = 4_000
+  // proposal-context 预算：只对短指代消息配 AI 提议上下文，单条与总计都限界，避免审批 LLM token 膨胀。
+  let contextBudget = limits.maxTotalChars
+
+  // 第一阶段（从前往后）：建立 ask_user_question 的 callId → 问题文本 映射（问题随 tool/call 落盘）；
+  // 同时记录每条直接人类消息紧邻前的 assistant 文本，作为指代消解上下文。
   const askQuestions = new Map<string, string>()
-  for (const event of authority.session.events) {
-    if (event.type !== 'tool/call' || event.data.name !== 'ask_user_question') continue
-    const text = askUserQuestionsText(event.data.arguments)
-    if (text !== '') askQuestions.set(String(event.data.callId), text)
+  const proposalContexts = new Map<number, string>()
+  let lastAssistant = ''
+  for (let index = 0; index < authority.session.events.length; index += 1) {
+    const event = authority.session.events[index]
+    if (event?.type === 'tool/call' && event.data.name === 'ask_user_question') {
+      const text = askUserQuestionsText(event.data.arguments)
+      if (text !== '') askQuestions.set(String(event.data.callId), text)
+      continue
+    }
+    if (event?.type === 'assistant/message') {
+      const text = assistantMessageText(event.data.message)
+      if (text !== '') lastAssistant = text
+      continue
+    }
+    if (event?.type === 'user/message' && event.data.source.kind === 'user') {
+      proposalContexts.set(index, lastAssistant)
+    }
   }
 
-  // 第二阶段：从后往前收集最近的直接人类消息与问答对（最近优先）。
+  // 第二阶段（从后往前）：收集最近的直接人类消息与问答对（最近优先）。
   for (let index = authority.session.events.length - 1; index >= 0 && messages.length < 8 && remaining > 0; index -= 1) {
     const event = authority.session.events[index]
     if (event?.type === 'user/message' && event.data.source.kind === 'user') {
@@ -280,6 +323,15 @@ function trustedUserMessages(authority: ToolExecution['agent']): string[] {
       const sanitized = sanitizeClassifierText(text).slice(0, remaining)
       messages.push(sanitized)
       remaining -= sanitized.length
+      // 仅当消息是短指代（可能引用 AI 方案）且上下文预算充足时，才附 AI 提议上下文；完整自足的长消息不附，省 token。
+      const proposal = proposalContexts.get(index) ?? ''
+      if (text.length <= limits.maxMessageLen && proposal !== '' && contextBudget > 0) {
+        const sanitizedContext = sanitizeClassifierText(proposal.slice(0, limits.maxChars)).slice(0, contextBudget)
+        contexts.push(sanitizedContext)
+        contextBudget -= sanitizedContext.length
+      } else {
+        contexts.push('')
+      }
       continue
     }
     if (event?.type === 'tool/result') {
@@ -292,9 +344,25 @@ function trustedUserMessages(authority: ToolExecution['agent']): string[] {
       const sanitized = sanitizeClassifierText(combined).slice(0, remaining)
       messages.push(sanitized)
       remaining -= sanitized.length
+      contexts.push('')
     }
   }
-  return messages.reverse()
+  return { messages: messages.reverse(), contexts: contexts.reverse() }
+}
+
+/** 从 assistant/message 事件提取纯文本（仅 text block，忽略 tool-call 等其他块）。 */
+function assistantMessageText(message: unknown): string {
+  if (typeof message !== 'object' || message === null) return ''
+  const content = (message as Record<string, unknown>).content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((block): block is { type: 'text'; text: string } =>
+      typeof block === 'object' && block !== null &&
+      (block as Record<string, unknown>).type === 'text' &&
+      typeof (block as Record<string, unknown>).text === 'string')
+    .map(block => block.text)
+    .join('\n')
+    .trim()
 }
 
 /** 从 ask_user_question 的 tool/call 参数（未解析的 JSON 字符串）提取问题文本。 */
@@ -381,6 +449,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   let classifier = classifierFrom(ctx, entry, () => uiLocale)
   let rootOptions = rootOptionsFrom(entry)
   let preflight = entry.preflight ?? false
+  let proposalContextMaxMessageLen = entry.proposalContextMaxMessageLen ?? 10
+  let proposalContextMaxChars = entry.proposalContextMaxChars ?? 400
+  let proposalContextMaxTotalChars = entry.proposalContextMaxTotalChars ?? 2_000
 
   let source: () => Config = () => entry
   let built = false
@@ -392,6 +463,9 @@ export function apply(ctx: Context, config: Config = {}): void {
       classifier = classifierFrom(ctx, cfg, () => uiLocale)
       rootOptions = rootOptionsFrom(cfg)
       preflight = cfg.preflight ?? false
+      proposalContextMaxMessageLen = cfg.proposalContextMaxMessageLen ?? 10
+      proposalContextMaxChars = cfg.proposalContextMaxChars ?? 400
+      proposalContextMaxTotalChars = cfg.proposalContextMaxTotalChars ?? 2_000
       built = true
     } catch (error) {
       if (!built) throw error
@@ -423,6 +497,12 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
     try {
       const descriptor = provider.describe({ redactSecrets: true }).find((item) => String(item.ns) === String(settingsNs))
+      // 移除 user 层后的生效值（schema 默认值 + composition base）：供设置卡「重置」即时预览，避免显示空白。
+      const defaults = Config({})
+      const base = descriptor?.base
+      const inherited = base !== null && typeof base === 'object'
+        ? { ...defaults, ...(base as Record<string, unknown>) }
+        : defaults
       return {
         ok: true,
         value: {
@@ -430,6 +510,7 @@ export function apply(ctx: Context, config: Config = {}): void {
           writable: provider.writable,
           value: descriptor?.value ?? provider.get(settingsNs) ?? {},
           user: descriptor?.user ?? {},
+          inherited,
           revision: descriptor?.revision ?? 0,
         },
       }
@@ -559,12 +640,18 @@ export function apply(ctx: Context, config: Config = {}): void {
     try {
       const authority = authorityFor(exec)
       const route = modelRoute(exec.agent) ?? modelRoute(authority?.agent)
+      const { messages: trustedMessages, contexts: proposalContexts } = trustedUserMessages(authority?.agent, {
+        maxMessageLen: proposalContextMaxMessageLen,
+        maxChars: proposalContextMaxChars,
+        maxTotalChars: proposalContextMaxTotalChars,
+      })
       const decision = await classifier.classify({
         toolName: exec.name,
         arguments: sanitizeClassifierArguments(exec.arguments),
         workspaceRoot: roots.workspace,
         policyReason: assessment.reason,
-        trustedUserMessages: trustedUserMessages(authority?.agent),
+        trustedUserMessages: trustedMessages,
+        proposalContexts,
         ...(route === undefined ? {} : { route }),
       }, exec.signal)
       if (decision.decision === 'allow') {
@@ -598,12 +685,18 @@ export function apply(ctx: Context, config: Config = {}): void {
       // 取回提权调用的原始参数（含 file_path/content），让分类器评估具体目标，而非只凭 justification 猜测。
       const rawArguments = escalationArgs.get(callId) ?? { justification }
       escalationArgs.delete(callId)
+      const { messages: trustedMessages, contexts: proposalContexts } = trustedUserMessages(authority.agent, {
+        maxMessageLen: proposalContextMaxMessageLen,
+        maxChars: proposalContextMaxChars,
+        maxTotalChars: proposalContextMaxTotalChars,
+      })
       const decision = await classifier.classify({
         toolName: req.toolName,
         arguments: sanitizeClassifierArguments(rawArguments),
         workspaceRoot: roots.workspace,
         policyReason: 'sandbox escalation request: ' + sanitizeClassifierText(justification),
-        trustedUserMessages: trustedUserMessages(authority.agent),
+        trustedUserMessages: trustedMessages,
+        proposalContexts,
         ...(route === undefined ? {} : { route }),
       }, req.signal ?? new AbortController().signal)
       if (decision.decision === 'allow') {

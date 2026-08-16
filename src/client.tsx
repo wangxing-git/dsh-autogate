@@ -1,6 +1,6 @@
 import { jsx, jsxs } from 'react/jsx-runtime'
-import { useState } from 'react'
-import { CardForm, RpcSettingsSource, SETTINGS_NS, TrailController, boolField, en, formatDuration, formatTime, numberField, textField, zh } from './client-logic.js'
+import { useEffect, useRef, useState } from 'react'
+import { CardForm, RpcSettingsSource, SETTINGS_NS, TrailController, boolField, en, formatDuration, formatTime, numberField, selectField, textField, zh } from './client-logic.js'
 
 // ==== 卡片样式（复用 DSH 主题变量，运行时注入） ====
 const CSS = `.sa_card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;list-style:none}
@@ -17,6 +17,7 @@ const CSS = `.sa_card{border:1px solid var(--dsw-alias-border-l2);background:var
 .sa_field{flex-direction:column;gap:6px;padding:12px 0;display:flex}
 .sa_field+.sa_field{border-top:1px solid var(--dsw-alias-border-l2)}
 .sa_label{min-width:0;color:var(--dsw-alias-label-primary);flex:1;font-size:13px;font-weight:500;line-height:1.5}
+.sa_dirtyDot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-state-warn-primary);margin-right:6px;flex:none}
 .sa_head{display:flex;align-items:center;gap:8px}
 .sa_badge{white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:500;line-height:17px}
 .sa_reset{font:inherit;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;padding:0;font-size:12px;line-height:1.5}
@@ -28,6 +29,7 @@ const CSS = `.sa_card{border:1px solid var(--dsw-alias-border-l2);background:var
 .sa_invalid{color:var(--dsw-alias-label-error);margin:0;font-size:12px;line-height:1.5}
 .sa_footer{border-top:1px solid var(--dsw-alias-border-l2);justify-content:flex-end;align-items:center;gap:8px;padding:12px 0 4px;display:flex}
 .sa_failed{min-width:0;color:var(--dsw-alias-label-error);flex:1;margin:0;font-size:12px;line-height:1.5}
+.sa_saved{min-width:0;color:var(--dsw-alias-state-success-primary);flex:1;margin:0;font-size:12px;line-height:1.5}
 .sa_btn{appearance:none;font:inherit;cursor:pointer;border-radius:8px;padding:5px 14px;font-size:13px;line-height:1.5}
 .sa_btnDiscard{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:0 0}
 .sa_btnSave{border:1px solid #0000;color:var(--dsw-alias-label-primary-foreground);background:var(--dsw-alias-button-primary-fill)}
@@ -51,7 +53,13 @@ const CSS = `.sa_card{border:1px solid var(--dsw-alias-border-l2);background:var
 .sa_trailItemBody{display:flex;flex-direction:column;gap:4px;margin-top:4px;padding-top:4px;border-top:1px dashed var(--dsw-alias-border-l2)}
 .sa_trailRow{display:flex;gap:8px;min-width:0}
 .sa_trailRowLabel{color:var(--dsw-alias-label-tertiary);flex:none;font-size:11px;line-height:1.5}
-.sa_trailDetail{color:var(--dsw-alias-label-secondary);word-break:break-all;font-size:12px;line-height:1.5}`
+.sa_trailDetail{color:var(--dsw-alias-label-secondary);word-break:break-all;font-size:12px;line-height:1.5}
+.sa_combo{position:relative;min-width:0}
+.sa_comboInput{width:100%;box-sizing:border-box;padding-right:26px}
+.sa_comboCaret{position:absolute;right:10px;top:50%;transform:translateY(-50%);pointer-events:none;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1}
+.sa_comboList{position:absolute;z-index:40;top:calc(100% + 4px);left:0;right:0;margin:0;padding:4px;list-style:none;max-height:240px;overflow:auto;background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;box-shadow:0 8px 24px #00000026}
+.sa_comboItem button{display:block;width:100%;padding:6px 10px;border:0;background:0 0;text-align:left;font:inherit;font-size:13px;line-height:1.5;color:var(--dsw-alias-label-primary);border-radius:6px;cursor:pointer}
+.sa_comboItem button:hover{background:var(--dsw-alias-bg-module-platform)}`
 
 function injectCss() {
   const tagId = 'dsh-autogate/client.css'
@@ -68,18 +76,23 @@ function injectCss() {
 class SafeAutoCardController {
   form: CardForm
   store: any
+  llmApi: any
 
-  constructor(settingsSource: RpcSettingsSource) {
+  constructor(settingsSource: RpcSettingsSource, llmApi: any) {
+    this.llmApi = llmApi
     this.form = new CardForm(settingsSource, [
       textField('presetName'),
       textField('fullAutoPresetName'),
-      textField('classifierProvider'),
-      textField('classifierModel'),
+      selectField('classifierProvider'),
+      selectField('classifierModel'),
       textField('classifierEndpoint'),
       textField('classifierPrompt', true),
       numberField('classifierTimeoutMs'),
       numberField('classifierMaxOutputTokens'),
       boolField('classifierRetry'),
+      numberField('proposalContextMaxMessageLen'),
+      numberField('proposalContextMaxChars'),
+      numberField('proposalContextMaxTotalChars'),
       boolField('preflight'),
       boolField('showTrail'),
     ])
@@ -98,6 +111,9 @@ class SafeAutoCardController {
       classifierTimeoutMs: this.form.field('classifierTimeoutMs'),
       classifierMaxOutputTokens: this.form.field('classifierMaxOutputTokens'),
       classifierRetry: this.form.field('classifierRetry'),
+      proposalContextMaxMessageLen: this.form.field('proposalContextMaxMessageLen'),
+      proposalContextMaxChars: this.form.field('proposalContextMaxChars'),
+      proposalContextMaxTotalChars: this.form.field('proposalContextMaxTotalChars'),
       preflight: this.form.field('preflight'),
       showTrail: this.form.field('showTrail'),
     }
@@ -107,6 +123,20 @@ class SafeAutoCardController {
     return {
       hooks: { safeAutoCard: this.store },
       ...this.form.actions(),
+      setOptions: (field: string, options: readonly string[]) => this.form.setOptions(field, options),
+      fetchModelCatalog: () => this.fetchModelCatalog(),
+    }
+  }
+
+  /** 复用 DSH 宿主现成的 llm.models 端点拉取全局模型目录（groups：provider 分组 → models）。 */
+  async fetchModelCatalog(): Promise<{ groups: any[] }> {
+    if (this.llmApi === undefined || typeof this.llmApi.models !== 'function') return { groups: [] }
+    try {
+      const { result } = await this.llmApi.models({})
+      if (result?.ok !== true) return { groups: [] }
+      return { groups: Array.isArray(result.value?.groups) ? result.value.groups : [] }
+    } catch {
+      return { groups: [] }
     }
   }
 }
@@ -131,22 +161,34 @@ function ValueField(props: any) {
           disabled: props.disabled,
           onChange: (event: any) => props.onEdit(event.target.value),
         })
-      : jsx('input', {
-          id: props.id,
-          className: 'sa_input',
-          type: 'text',
-          value: props.text,
-          placeholder: props.placeholder ?? '',
-          disabled: props.disabled,
-          onChange: (event: any) => props.onEdit(event.target.value),
-        })
+      : props.combo
+        ? jsx(ComboInput, {
+            id: props.id,
+            text: props.text,
+            options: props.options,
+            placeholder: props.placeholder ?? '',
+            disabled: props.disabled,
+            onEdit: props.onEdit,
+          })
+        : jsx('input', {
+            id: props.id,
+            className: 'sa_input',
+            type: 'text',
+            value: props.text,
+            placeholder: props.placeholder ?? '',
+            disabled: props.disabled,
+            onChange: (event: any) => props.onEdit(event.target.value),
+          })
   return jsxs('div', {
     className: 'sa_field',
     children: [
       jsxs('div', {
         className: 'sa_head',
         children: [
-          jsx('label', { className: 'sa_label', htmlFor: props.id, children: props.label }),
+          jsxs('label', { className: 'sa_label', htmlFor: props.id, children: [
+            props.dirty ? jsx('span', { className: 'sa_dirtyDot', title: props.dirtyLabel, 'aria-label': props.dirtyLabel }) : null,
+            props.label,
+          ] }),
           props.overridden
             ? jsxs('span', {
                 children: [
@@ -163,11 +205,89 @@ function ValueField(props: any) {
   })
 }
 
+/** 可编辑下拉（combobox）：输入框自由输入 + 自定义候选面板（点击选择、点击外部关闭）。 */
+function ComboInput(props: any) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const options = Array.isArray(props.options) ? props.options : []
+  const text = props.text ?? ''
+  const candidates = options.filter((option: string) => option !== text && (text === '' || option.includes(text)))
+  useEffect(() => {
+    if (!open) return
+    const onDown = (event: any) => {
+      const root = rootRef.current
+      const target = event.target
+      if (root !== null && target instanceof Node && !root.contains(target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+  // 焦点移出整个 combobox（输入框 + 下拉列表）时收起：点击其他可聚焦元素 relatedTarget 在外部、
+  // 点击空白/文本 relatedTarget 为 null，均关闭；点击候选按钮时 relatedTarget 仍在内部，交给按钮 onClick。
+  const onBlur = (event: any) => {
+    const root = rootRef.current
+    if (root === null) return
+    const next = event.relatedTarget
+    if (!(next instanceof Node) || !root.contains(next)) setOpen(false)
+  }
+  return jsxs('div', {
+    ref: rootRef,
+    className: 'sa_combo',
+    onBlur,
+    children: [
+      jsx('input', {
+        id: props.id,
+        className: 'sa_input sa_comboInput',
+        type: 'text',
+        value: text,
+        placeholder: props.placeholder ?? '',
+        disabled: props.disabled,
+        autoComplete: 'off',
+        onChange: (event: any) => { props.onEdit(event.target.value); setOpen(true) },
+        onFocus: () => setOpen(true),
+      }),
+      jsx('span', { className: 'sa_comboCaret', children: '▾' }),
+      open && candidates.length > 0
+        ? jsxs('ul', {
+            className: 'sa_comboList',
+            role: 'listbox',
+            children: candidates.map((option: string) => jsx('li', {
+              key: option,
+              className: 'sa_comboItem',
+              children: jsx('button', {
+                type: 'button',
+                onClick: () => { props.onEdit(option); setOpen(false) },
+                children: option,
+              }),
+            })),
+          })
+        : null,
+    ],
+  })
+}
+
 function SafeAutoCard(props: any) {
   const { t } = props
   const state = props.useSafeAutoCard((snapshot: any) => snapshot)
   const [open, setOpen] = useState(false)
+  const [groups, setGroups] = useState<any[]>([])
+  const currentProvider = state.classifierProvider?.text ?? ''
   injectCss()
+  // 展开设置卡时经 DSH 宿主现成的 llm.models 端点拉取一次全局模型目录（provider 分组 → models），
+  // 候选仅用于快速选择，仍可自定义输入。
+  useEffect(() => {
+    if (!open) return
+    void props.fetchModelCatalog().then((catalog: { groups: any[] }) => {
+      setGroups(catalog.groups)
+      props.setOptions('classifierProvider', catalog.groups.map((g) => g.id))
+    })
+  }, [open])
+  // provider 变化时从已拉取的分组本地联动 model 候选；未知/空则清空 model 候选。
+  useEffect(() => {
+    if (!open) return
+    const group = groups.find((g) => g.id === currentProvider)
+    props.setOptions('classifierModel', group !== undefined ? group.models.map((m: any) => m.id) : [])
+  }, [open, currentProvider, groups])
   if (!state.available) return null
   const disabled = !state.writable
   const blocked = !state.dirty || state.invalid || state.saving
@@ -175,13 +295,16 @@ function SafeAutoCard(props: any) {
     { key: 'preflight', label: t('preflight'), hint: t('preflightHint'), bool: true },
     { key: 'presetName', label: t('presetName'), hint: t('presetNameHint') },
     { key: 'fullAutoPresetName', label: t('fullAutoPresetName'), hint: t('fullAutoPresetNameHint') },
-    { key: 'classifierProvider', label: t('classifierProvider'), hint: t('classifierProviderHint') },
-    { key: 'classifierModel', label: t('classifierModel'), hint: t('classifierModelHint') },
+    { key: 'classifierProvider', label: t('classifierProvider'), hint: t('classifierProviderHint'), combo: true },
+    { key: 'classifierModel', label: t('classifierModel'), hint: t('classifierModelHint'), combo: true },
     { key: 'classifierEndpoint', label: t('classifierEndpoint'), hint: t('classifierEndpointHint') },
     { key: 'classifierPrompt', label: t('classifierPrompt'), hint: t('classifierPromptHint'), multiline: true },
     { key: 'classifierTimeoutMs', label: t('classifierTimeoutMs'), hint: t('classifierTimeoutMsHint') },
     { key: 'classifierMaxOutputTokens', label: t('classifierMaxOutputTokens'), hint: t('classifierMaxOutputTokensHint') },
     { key: 'classifierRetry', label: t('classifierRetry'), hint: t('classifierRetryHint'), bool: true },
+    { key: 'proposalContextMaxMessageLen', label: t('proposalContextMaxMessageLen'), hint: t('proposalContextMaxMessageLenHint') },
+    { key: 'proposalContextMaxChars', label: t('proposalContextMaxChars'), hint: t('proposalContextMaxCharsHint') },
+    { key: 'proposalContextMaxTotalChars', label: t('proposalContextMaxTotalChars'), hint: t('proposalContextMaxTotalCharsHint') },
     { key: 'showTrail', label: t('showTrail'), hint: t('showTrailHint'), bool: true },
   ]
   return jsxs('li', {
@@ -216,9 +339,11 @@ function SafeAutoCard(props: any) {
                 hint: f.hint,
                 multiline: f.multiline === true,
                 bool: f.bool === true,
+                combo: f.combo === true,
                 overriddenLabel: t('overridden'),
                 resetLabel: t('reset'),
                 invalidLabel: t('invalid'),
+                dirtyLabel: t('dirtyLabel'),
                 disabled,
                 ...state[f.key],
                 onEdit: (text: string) => props.edit(f.key, text),
@@ -228,6 +353,7 @@ function SafeAutoCard(props: any) {
                 className: 'sa_footer',
                 children: [
                   state.failed ? jsx('p', { className: 'sa_failed', children: t('saveFailed') }) : null,
+                  state.saved ? jsx('p', { className: 'sa_saved', children: t('saved') }) : null,
                   jsx('button', { type: 'button', className: 'sa_btn sa_btnDiscard', disabled: !state.dirty || state.saving, onClick: props.discard, children: t('discard') }),
                   jsx('button', { type: 'button', className: 'sa_btn sa_btnSave', disabled: blocked, onClick: props.save, children: t(state.saving ? 'saving' : 'save') }),
                 ],
@@ -326,10 +452,12 @@ function apply(ctx: any) {
   ctx.effect(() => ctx.locale.register(SETTINGS_NS, { zh, en }), 'autogate: card dictionaries')
   const t = ctx.locale.bind(SETTINGS_NS)
   const rpc = ctx.connection?.rpc
+  // 复用 DSH 宿主现成的模型目录 API（llm.models），与对话框模型选择器同源。
+  const llmApi = ctx.connection?.api?.llm
   // 设置卡与轨迹浮窗共享同一个 settings 数据源：设置卡保存 showTrail 后，
   // TrailController 经订阅即时启停轮询，无需重新拉取。
   const settingsSource = new RpcSettingsSource(rpc)
-  const controller = new SafeAutoCardController(settingsSource)
+  const controller = new SafeAutoCardController(settingsSource, llmApi)
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
     id: 'autogate',

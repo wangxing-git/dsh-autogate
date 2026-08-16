@@ -14,7 +14,7 @@ vi.mock('@deepseek-ai/dsh-client-runtime/client', () => {
   return { createSnapshotStore: fakeStore }
 })
 
-import { CardForm, RpcSettingsSource, TrailController, boolField, en, formatDuration, formatTime, numberField, textField, zh } from '../src/client-logic.js'
+import { CardForm, RpcSettingsSource, TrailController, boolField, en, formatDuration, formatTime, numberField, selectField, textField, zh } from '../src/client-logic.js'
 
 describe('formatTime', () => {
   it('格式化为本地 HH:MM:SS', () => {
@@ -66,6 +66,14 @@ describe('字段转换 spec', () => {
     expect(f.parse('false')).toEqual({ kind: 'set', value: false })
     expect(f.parse('')).toBeUndefined()
   })
+  it('selectField format/parse 与候选选项（允许自定义值）', () => {
+    const f = selectField('classifierProvider', ['deepseek', 'openai'])
+    expect(f.format('openai')).toBe('openai')
+    expect(f.format(123)).toBe('')
+    expect(f.parse('custom-provider')).toEqual({ kind: 'set', value: 'custom-provider' })
+    expect(f.parse('')).toEqual({ kind: 'clear' })
+    expect(f.options).toEqual(['deepseek', 'openai'])
+  })
 })
 
 describe('CardForm staged 编辑与保存', () => {
@@ -84,7 +92,7 @@ describe('CardForm staged 编辑与保存', () => {
   it('field 初始值来自 scope 快照', () => {
     const scope = mockScope({ status: 'ready', writable: true, value: { presetName: 'auto' }, user: {} })
     const form = new CardForm(scope, [textField('presetName')])
-    expect(form.field('presetName')).toEqual({ text: 'auto', overridden: false, invalid: false })
+    expect(form.field('presetName')).toEqual({ text: 'auto', overridden: false, invalid: false, dirty: false, options: [] })
     expect(form.shell().dirty).toBe(false)
   })
 
@@ -92,12 +100,31 @@ describe('CardForm staged 编辑与保存', () => {
     const scope = mockScope({ status: 'ready', writable: true, value: { presetName: 'auto' }, user: {} })
     const form = new CardForm(scope, [textField('presetName')])
     form.actions().edit('presetName', 'custom')
-    expect(form.field('presetName')).toEqual({ text: 'custom', overridden: true, invalid: false })
+    expect(form.field('presetName')).toEqual({ text: 'custom', overridden: false, invalid: false, dirty: true, options: [] })
     expect(form.shell().dirty).toBe(true)
+    expect(form.shell().invalid).toBe(false)
     await form.save()
     expect(scope._writes).toEqual([{ set: { presetName: 'custom' }, unset: [] }])
     expect(form.shell().dirty).toBe(false)
     expect(form.shell().failed).toBe(false)
+  })
+
+  it('改回原值不算未保存（不显示圆点/徽章）', () => {
+    const scope = mockScope({ status: 'ready', writable: true, value: { presetName: 'auto' }, user: {} })
+    const form = new CardForm(scope, [textField('presetName')])
+    form.actions().edit('presetName', 'custom')
+    expect(form.field('presetName').dirty).toBe(true)
+    form.actions().edit('presetName', 'auto')
+    expect(form.field('presetName').dirty).toBe(false)
+    expect(form.shell().dirty).toBe(false)
+  })
+
+  it('值未变化时保存不写入 user 层（不锁定字段）', async () => {
+    const scope = mockScope({ status: 'ready', writable: true, value: { presetName: 'auto' }, user: {} })
+    const form = new CardForm(scope, [textField('presetName')])
+    form.actions().edit('presetName', 'auto')
+    await form.save()
+    expect(scope._writes).toEqual([])
   })
 
   it('非法数字输入 → invalid，save 失败标记 failed', async () => {
@@ -105,6 +132,7 @@ describe('CardForm staged 编辑与保存', () => {
     const form = new CardForm(scope, [numberField('classifierTimeoutMs')])
     form.actions().edit('classifierTimeoutMs', 'abc')
     expect(form.field('classifierTimeoutMs').invalid).toBe(true)
+    expect(form.shell().invalid).toBe(true)
     await form.save()
     expect(scope._writes).toHaveLength(0)
     expect(form.shell().failed).toBe(true)
@@ -117,6 +145,31 @@ describe('CardForm staged 编辑与保存', () => {
     expect(form.field('presetName').overridden).toBe(false)
     await form.save()
     expect(scope._writes).toEqual([{ set: {}, unset: ['presetName'] }])
+  })
+
+  it('输入非法值再重置 → 显示继承值而非空白', () => {
+    const scope = mockScope({
+      status: 'ready', writable: true,
+      value: { classifierTimeoutMs: 5000 },
+      user: { classifierTimeoutMs: 5000 },
+      inherited: { classifierTimeoutMs: 8000 },
+    })
+    const form = new CardForm(scope, [numberField('classifierTimeoutMs')])
+    form.actions().edit('classifierTimeoutMs', 'abc')
+    expect(form.field('classifierTimeoutMs').invalid).toBe(true)
+    form.actions().resetField('classifierTimeoutMs')
+    const f = form.field('classifierTimeoutMs')
+    expect(f.text).toBe('8000')
+    expect(f.invalid).toBe(false)
+    expect(f.overridden).toBe(false)
+    expect(f.dirty).toBe(true)
+  })
+
+  it('未覆盖字段编辑不显示 overridden（不出现重置按钮）', () => {
+    const scope = mockScope({ status: 'ready', writable: true, value: { classifierTimeoutMs: 8000 }, user: {} })
+    const form = new CardForm(scope, [numberField('classifierTimeoutMs')])
+    form.actions().edit('classifierTimeoutMs', 'abc')
+    expect(form.field('classifierTimeoutMs').overridden).toBe(false)
   })
 
   it('discard 清空 staged', () => {
@@ -135,13 +188,21 @@ describe('CardForm staged 编辑与保存', () => {
     expect(form.shell().available).toBe(false)
     expect(form.shell().writable).toBe(false)
   })
+
+  it('setOptions 动态注入下拉候选并覆盖静态选项', () => {
+    const scope = mockScope({ status: 'ready', writable: true, value: { classifierProvider: 'deepseek' }, user: {} })
+    const form = new CardForm(scope, [selectField('classifierProvider', ['static'])])
+    expect(form.field('classifierProvider').options).toEqual(['static'])
+    form.setOptions('classifierProvider', ['deepseek', 'openai'])
+    expect(form.field('classifierProvider').options).toEqual(['deepseek', 'openai'])
+  })
 })
 
 describe('RpcSettingsSource RPC 数据源', () => {
   it('拉取成功 → status ready 且透传 value/user/writable', async () => {
     const source = new RpcSettingsSource({ call: async () => ({ ok: true, value: { writable: true, value: { preflight: true }, user: { preflight: true } } }) })
     await source.refresh()
-    expect(source.getSnapshot()).toEqual({ status: 'ready', writable: true, value: { preflight: true }, user: { preflight: true } })
+    expect(source.getSnapshot()).toEqual({ status: 'ready', writable: true, value: { preflight: true }, user: { preflight: true }, inherited: {} })
   })
 
   it('RPC 返回非 ok → status unavailable', async () => {

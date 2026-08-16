@@ -29,6 +29,12 @@ export interface Config {
     readonly classifierMaxOutputTokens?: number;
     /** 分类器输出解析失败时静默重试一次；默认开启（temperature 0 下偶发格式抖动）。 */
     readonly classifierRetry?: boolean;
+    /** 短指代消息长度阈值（字符）：长度不超过该值的直接人类消息才携带 AI 提议上下文用于消解指代；默认 10。 */
+    readonly proposalContextMaxMessageLen?: number;
+    /** 单条 AI 提议上下文上限（字符）；默认 400。 */
+    readonly proposalContextMaxChars?: number;
+    /** AI 提议上下文总预算（字符）：多条消息的上下文合计不超过该值；默认 2000。 */
+    readonly proposalContextMaxTotalChars?: number;
     /** 沙盒前拦截判断开关：true 执行普通 L0 规则 + LLM 分类，false 完全依赖沙盒（硬 deny 与提权审批不受影响）。 */
     readonly preflight?: boolean;
     /** 审批轨迹浮窗开关（默认显示）：关闭则不显示右下角浮窗，且客户端停止轮询轨迹接口。 */

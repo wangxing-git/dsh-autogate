@@ -95,6 +95,11 @@ describe('CLASSIFIER_SYSTEM_PROMPT 场景覆盖', () => {
   it('覆盖 fail-closed 底线', () => {
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('fail-closed')
   })
+  it('覆盖 proposal-context 指代上下文规则（仅消解指代、不作授权）', () => {
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('<proposal-context>')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('resolve what the short user message refers to')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('never on its own as a reason to allow or deny')
+  })
 })
 
 describe('createDshClassifier 审查提示词', () => {
