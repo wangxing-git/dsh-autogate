@@ -9,7 +9,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 | 层 | 决策 | 说明 |
 | --- | --- | --- |
 | L0 确定性规则 | allow / deny | 零成本、零 LLM：只读、会话状态、工作区内编辑与删除、build/test、run_code 容器直接放行；工作区外普通路径读直接放行；工作区外的写/删除（敏感 shell/凭据配置文件写除外）放行交由 workspace-write 沙箱拦截 + escalation 弹窗；工作区外敏感配置文件写交 LLM 审查；空命令、动态命令名、参数缺失等兜底放行交由沙箱；提权、自毁、凭据外传、关键路径删除硬拒绝 |
-| L1 LLM 安全审批 | allow / deny | 沙箱不拦截但语义危险的操作（未识别工具、模糊 shell、敏感路径读、动态目标、块设备、持久终端、git 状态变更、网络/数据库操作、工作区内受保护路径写）交 LLM 两态裁决：用户明确授权的操作放行，减少人工批准 |
+| L1 LLM 安全审批 | allow / deny | 沙箱不拦截但语义危险的操作（未识别工具、模糊 shell、敏感路径读、动态目标、块设备、持久终端、git 状态变更、网络/数据库操作、工作区内受保护路径写）交 LLM 两态裁决：用户明确授权的操作放行，减少人工批准。分类器输入先脱敏再标签隔离（`<untrusted>` 数据 vs `<user-authority>` 授权），并内置注入防御；agent 指令文件（AGENTS.md / CLAUDE.md / .dsh 等）按常规配置归类，用户明确授权即可编辑 |
 | L2 人工审批 | ask | 两条通道：① AI 用 ask_user_question 问用户确认操作合法，确认后重新执行再过 LLM；② AI 用 sandbox_permissions + justification 重试走 DSH 沙箱提权（escalation），本插件先过 LLM 判断——合理越界直接批准不弹窗，危险/不确定才人工弹窗 |
 
 ## 两种模式
@@ -32,6 +32,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 本插件是「减少人工审批的决策层，**不是安全边界**」。真正的执行边界仍是 DSH 的 workspace-write 沙箱及其提权审批。
 
 - L1 LLM 分类器是启发式的，可能误判（放行危险操作或拒绝安全操作）。fail-closed 减少误放行，但无法消除。
+- 提示词注入防御（脱敏 + `<untrusted>`/`<user-authority>` 标签隔离 + anti-injection 条款）是软防御，可抬高注入门槛但无法彻底消除；硬保证仍靠 L0 确定性规则与 workspace-write 沙箱兜底。
 - 静态路径检查（含 symlink realpath 加固）仍存在 TOCTOU 窗口：符号链接可能在检查通过后、写入前被重新指向。
 - **全自动（`auto`）模式**下 LLM 裁决为最终决定、不再人工弹窗——仅在可信环境使用。
 - 你对每一次被批准操作的最终效果负责。请查看审批轨迹，存疑时优先使用半自动（`auto-ask`）。
@@ -106,7 +107,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
       index.ts         入口：guard + tools/pre-execute 两态判定 + 提权重试放行 + 审批轨迹/设置读写 RPC
       policy.ts        工具级确定性规则（L0）与危险识别
       shell.ts         bash/pwsh 静态分析（L0 硬 deny + 危险 shell 识别）
-      classifier.ts    LLM 分类器（DSH 内部 LLM / 可选 HTTP 端点）+ 脱敏 + 系统提示词
+      classifier.ts    LLM 分类器（DSH 内部 LLM / 可选 HTTP 端点）+ 脱敏 + 标签隔离 + 注入防御 + 系统提示词
       paths.ts         路径规范化、危险路径判定、工作区根解析
       trail.ts         审批轨迹（进程级环形缓冲，只增不持久化）
       types.ts         共享类型
@@ -126,6 +127,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 - 分类器默认复用当前会话模型；若会话使用第三方 provider，分类请求会发往该 provider（已脱敏、限界）。
 - `preflight` 开关默认 `false`：普通工具调用完全依赖 workspace-write 沙箱，默认只跑硬 deny guard 与 escalation 预审；设 `preflight: true` 才会对每次调用加确定性规则 + LLM 分类。
 - 凭据外传检测是浅层文本模式（无法识别 base64 编码或分段的凭据）；把它当作绊线，而非保证。
+- 分类器的注入防御是提示词级软约束（脱敏 + 标签隔离 + anti-injection），对抗性注入仍可能诱导误判；危险操作的最终拦截依赖 L0 硬 deny 与 workspace-write 沙箱。
 
 ## License
 

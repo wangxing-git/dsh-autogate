@@ -9,7 +9,7 @@ DeepSeek Harness auto-approval plugin: adds two permission presets — **semi-au
 | Layer | Decision | Description |
 | --- | --- | --- |
 | L0 Deterministic rules | allow / deny | Zero cost, zero LLM: read-only ops, session state, in-workspace edits and deletes, build/test, and the `run_code` container pass directly; reads of ordinary paths outside the workspace pass directly; writes/deletes outside the workspace (except writes to sensitive shell/credential config files) pass and rely on the workspace-write sandbox to intercept + escalation popup; writes to sensitive config files outside the workspace go to LLM review; empty commands, dynamic command names, and missing arguments fall through to the sandbox; privilege escalation, self-destruction, credential exfiltration, and deletion of critical paths are hard-denied |
-| L1 LLM safety approval | allow / deny | Operations the sandbox doesn't intercept but are semantically dangerous (unrecognized tools, ambiguous shell, sensitive path reads, dynamic targets, block devices, persistent terminals, git state changes, network/database operations, writes to protected in-workspace paths) go to a two-state LLM decision: operations explicitly authorized by the user are allowed, reducing manual approvals |
+| L1 LLM safety approval | allow / deny | Operations the sandbox doesn't intercept but are semantically dangerous (unrecognized tools, ambiguous shell, sensitive path reads, dynamic targets, block devices, persistent terminals, git state changes, network/database operations, writes to protected in-workspace paths) go to a two-state LLM decision: operations explicitly authorized by the user are allowed, reducing manual approvals. Classifier inputs are sanitized then tag-separated (`<untrusted>` data vs `<user-authority>` authority) with built-in injection defense; agent instruction files (AGENTS.md / CLAUDE.md / .dsh, etc.) are classified as routine configuration, editable when explicitly authorized by the user |
 | L2 Human approval | ask | Two channels: ① the AI uses ask_user_question to confirm the operation is legitimate, then re-runs it and passes the LLM again; ② the AI retries with sandbox_permissions + justification to go through DSH's built-in sandbox escalation — this plugin runs the LLM first: a reasonable escalation is approved directly without a popup, dangerous/uncertain cases show a human popup |
 
 ## Two modes
@@ -32,6 +32,7 @@ Both modes share the same L0 deterministic rules and L1 LLM classifier; the only
 This plugin is a **decision layer that reduces manual approvals — not a security boundary**. The real enforcement boundary remains DSH's workspace-write sandbox and its escalation approval.
 
 - The L1 LLM classifier is heuristic and can misjudge (allow a dangerous operation or deny a safe one). fail-closed reduces false allows but cannot eliminate them.
+- The prompt-injection defense (sanitization + `<untrusted>`/`<user-authority>` tag separation + anti-injection clause) is a soft defense: it raises the bar but cannot eliminate injection; the hard guarantee remains the L0 deterministic rules and the workspace-write sandbox fallback.
 - Static path checks (including the symlink realpath hardening) still have a TOCTOU window: a symlink can be retargeted after the check passes and before the actual write.
 - In **full-auto (`auto`) mode** the LLM decision is final with no human popup — use it only in environments you trust.
 - You remain responsible for the final effect of every approved operation. Review the approval trail, and prefer semi-auto (`auto-ask`) when in doubt.
@@ -106,7 +107,7 @@ While the plugin is active, a floating **Approval trail** toggle appears in the 
       index.ts         Entry: guard + tools/pre-execute two-state decision + escalation retry allow + approval-trail & settings RPC
       policy.ts        Tool-level deterministic rules (L0) and danger detection
       shell.ts         bash/pwsh static analysis (L0 hard deny + dangerous shell detection)
-      classifier.ts    LLM classifier (DSH built-in LLM / optional HTTP endpoint) + sanitization + system prompt
+      classifier.ts    LLM classifier (DSH built-in LLM / optional HTTP endpoint) + sanitization + tag separation + injection defense + system prompt
       paths.ts         Path normalization, dangerous-path detection, workspace-root resolution
       trail.ts         Approval trail (process-level ring buffer, append-only, not persisted)
       types.ts         Shared types
@@ -126,6 +127,7 @@ While the plugin is active, a floating **Approval trail** toggle appears in the 
 - The classifier defaults to reusing the current session model; if the session uses a third-party provider, classification requests go to that provider (sanitized and bounded).
 - The `preflight` switch defaults to `false`: ordinary tool calls rely entirely on the workspace-write sandbox, and only the hard-deny guard and the escalation pre-approval run by default. Set `preflight: true` to add deterministic rules + LLM classification on every call.
 - Credential-exfiltration detection is a shallow text pattern (it cannot see base64-encoded or chunked secrets); treat it as a tripwire, not a guarantee.
+- The classifier's injection defense is a prompt-level soft constraint (sanitization + tag separation + anti-injection); adversarial injection may still induce misjudgment. Final interception of dangerous operations relies on L0 hard deny and the workspace-write sandbox.
 
 ## License
 
