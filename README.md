@@ -56,6 +56,7 @@ Configuration is wired through the DSH settings service (`ctx.settings`): write 
       fullAutoPresetName: auto         # full-auto preset key (default auto): LLM decision is final, no human popup
       classifierTimeoutMs: 8000        # classifier timeout (100–60000ms), fail-closed on timeout
       classifierMaxOutputTokens: 1024  # classifier max output tokens (64–4096)
+      classifierRetry: false           # retry once on classifier output parse failure (default false)
       # classifierPrompt: |              # review (classification) system prompt; empty uses the built-in default
       #   (custom review prompt judging intent / type / reversibility / impact)
       # Fixed classifier model (defaults to the current session's provider/model; both fields must be set together)

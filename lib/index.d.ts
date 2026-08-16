@@ -28,6 +28,8 @@ export interface Config {
     readonly classifierApiKeyEnv?: string;
     readonly classifierTimeoutMs?: number;
     readonly classifierMaxOutputTokens?: number;
+    /** 分类器输出解析失败时静默重试一次；默认关闭（temperature 0 下偶发格式抖动）。 */
+    readonly classifierRetry?: boolean;
     /** 沙盒前拦截判断开关：true 执行普通 L0 规则 + LLM 分类，false 完全依赖沙盒（硬 deny 与提权审批不受影响）。 */
     readonly preflight?: boolean;
     /** 全自动权限预设键（默认 auto）：该预设下审批不再人工弹窗，LLM 裁决为最终决定。 */

@@ -23,8 +23,8 @@ describe('parseClassifierDecision', () => {
   it('两态下拒绝 ask', () => {
     expect(() => parseClassifierDecision({ decision: 'ask', reason: '?' })).toThrow('classifier decision is invalid')
   })
-  it('拒绝多余键', () => {
-    expect(() => parseClassifierDecision({ decision: 'allow', reason: 'ok', extra: 1 })).toThrow('only decision and reason')
+  it('忽略多余键（放宽：只要求 decision+reason 合法）', () => {
+    expect(parseClassifierDecision({ decision: 'allow', reason: 'ok', extra: 1 })).toEqual({ decision: 'allow', reason: 'ok' })
   })
 })
 
@@ -66,6 +66,20 @@ describe('CLASSIFIER_SYSTEM_PROMPT 场景覆盖', () => {
   it('关键路径删除的硬边界不退化', () => {
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('user home ROOT')
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('filesystem root')
+  })
+  it('覆盖 git 常规操作白名单与 dotfile 分级', () => {
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('routine Git and package-manager state changes')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('Per-project config dotfiles')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('.gitignore')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('push --force')
+  })
+  it('覆盖公钥/私钥区分与 policyReason 使用', () => {
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('public key')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('*.pub')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('policyReason')
+  })
+  it('覆盖 fail-closed 底线', () => {
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('fail-closed')
   })
 })
 
@@ -138,6 +152,50 @@ describe('createDshClassifier 异常路径', () => {
     const runtime = { stream: async function* () { yield { type: 'text-delta', index: 0, text: '{"decision":"allow","reason":"ok"}' } } } as any
     const classifier = createDshClassifier(runtime, { timeoutMs: 1000 })
     await expect(classifier.classify(routedInput as any, new AbortController().signal)).rejects.toThrow('finish')
+  })
+})
+
+describe('createDshClassifier 解析失败重试', () => {
+  const input = { toolName: 'x', arguments: {}, workspaceRoot: '/ws', policyReason: 't', trustedUserMessages: [], route: { provider: 'p', model: 'm' } }
+
+  it('retryOnFailure 开启时解析失败重试一次成功', async () => {
+    let calls = 0
+    const runtime = {
+      stream: async function* () {
+        calls += 1
+        if (calls === 1) yield { type: 'text-delta', index: 0, text: 'not-json' }
+        else yield { type: 'text-delta', index: 0, text: '{"decision":"allow","reason":"ok"}' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    }
+    const classifier = createDshClassifier(runtime as any, { timeoutMs: 1000, retryOnFailure: true })
+    const decision = await classifier.classify(input as any, new AbortController().signal)
+    expect(decision).toEqual({ decision: 'allow', reason: 'ok' })
+    expect(calls).toBe(2)
+  })
+
+  it('retryOnFailure 关闭时解析失败直接抛错（fail-closed）', async () => {
+    const runtime = {
+      stream: async function* () {
+        yield { type: 'text-delta', index: 0, text: 'not-json' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    }
+    const classifier = createDshClassifier(runtime as any, { timeoutMs: 1000 })
+    await expect(classifier.classify(input as any, new AbortController().signal)).rejects.toThrow()
+  })
+
+  it('流收集错误不重试（即使 retryOnFailure 开启）', async () => {
+    let calls = 0
+    const runtime = {
+      stream: async function* () {
+        calls += 1
+        yield { type: 'tool-call-delta' }
+      },
+    }
+    const classifier = createDshClassifier(runtime as any, { timeoutMs: 1000, retryOnFailure: true })
+    await expect(classifier.classify(input as any, new AbortController().signal)).rejects.toThrow('tool')
+    expect(calls).toBe(1)
   })
 })
 

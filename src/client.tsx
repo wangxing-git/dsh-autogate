@@ -78,6 +78,7 @@ class SafeAutoCardController {
       textField('classifierPrompt', true),
       numberField('classifierTimeoutMs'),
       numberField('classifierMaxOutputTokens'),
+      boolField('classifierRetry'),
       boolField('preflight'),
     ])
     this.store = this.form.bind(() => this.projection())
@@ -94,6 +95,7 @@ class SafeAutoCardController {
       classifierPrompt: this.form.field('classifierPrompt'),
       classifierTimeoutMs: this.form.field('classifierTimeoutMs'),
       classifierMaxOutputTokens: this.form.field('classifierMaxOutputTokens'),
+      classifierRetry: this.form.field('classifierRetry'),
       preflight: this.form.field('preflight'),
     }
   }
@@ -176,6 +178,7 @@ function SafeAutoCard(props: any) {
     { key: 'classifierPrompt', label: t('classifierPrompt'), hint: t('classifierPromptHint'), multiline: true },
     { key: 'classifierTimeoutMs', label: t('classifierTimeoutMs'), hint: t('classifierTimeoutMsHint') },
     { key: 'classifierMaxOutputTokens', label: t('classifierMaxOutputTokens'), hint: t('classifierMaxOutputTokensHint') },
+    { key: 'classifierRetry', label: t('classifierRetry'), hint: t('classifierRetryHint'), bool: true },
   ]
   return jsxs('li', {
     className: 'sa_card',

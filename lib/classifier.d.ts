@@ -9,7 +9,7 @@ export declare function withLocaleDirective(systemPrompt: string, locale: UiLoca
 export declare function sanitizeClassifierText(value: string): string;
 /** 分类器网络边界前的脱敏：剥离大块内容与疑似密钥，限制深度与数量。 */
 export declare function sanitizeClassifierArguments(value: unknown, depth?: number): unknown;
-/** 严格解析分类器输出：只接受恰好 decision+reason 两键的 JSON。 */
+/** 解析分类器输出：必须有合法的 decision + reason；忽略模型偶尔多吐的额外字段，减少 fail-closed 误拒。 */
 export declare function parseClassifierDecision(value: unknown): ClassifierDecision;
 /** 是否为沙箱提权审批请求（reason 以 escalation 前缀开头）。 */
 export declare function isEscalationApprovalReason(reason: string | undefined): reason is string;
@@ -25,6 +25,8 @@ export interface DshClassifierConfig {
     systemPrompt?: string;
     /** 当前 UI 语言 getter：zh 时让 LLM 用中文写 reason；缺省保持英文。 */
     locale?: () => UiLocale | undefined;
+    /** 分类器输出解析失败时静默重试一次（temperature 0 下偶发格式抖动）；默认关闭，流/网络错误不重试。 */
+    retryOnFailure?: boolean;
 }
 interface LlmStreamRuntime {
     stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
@@ -40,6 +42,8 @@ export interface HttpClassifierConfig {
     systemPrompt?: string;
     /** 当前 UI 语言 getter：zh 时让 LLM 用中文写 reason；缺省保持英文。 */
     locale?: () => UiLocale | undefined;
+    /** 分类器输出解析失败时静默重试一次；默认关闭，fetch / HTTP 状态错误不重试。 */
+    retryOnFailure?: boolean;
 }
 export declare function createHttpClassifier(config: HttpClassifierConfig): SafetyClassifier;
 export {};

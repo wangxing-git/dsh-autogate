@@ -202,6 +202,8 @@ export const zh = {
   classifierTimeoutMsHint: '100–60000，超时 fail-closed',
   classifierMaxOutputTokens: '输出 token 上限',
   classifierMaxOutputTokensHint: '64–4096',
+  classifierRetry: '解析失败重试',
+  classifierRetryHint: '分类器输出解析失败时静默重试一次（默认关闭）',
   // 审批轨迹面板
   trailTitle: '审批轨迹',
   trailCollapse: '收起',
@@ -245,6 +247,8 @@ export const en = {
   classifierTimeoutMsHint: '100–60000, fail-closed on timeout',
   classifierMaxOutputTokens: 'Max output tokens',
   classifierMaxOutputTokensHint: '64–4096',
+  classifierRetry: 'Retry on parse failure',
+  classifierRetryHint: 'Retry once when classifier output fails to parse (default off)',
   // 审批轨迹面板
   trailTitle: 'Approval trail',
   trailCollapse: 'Collapse',

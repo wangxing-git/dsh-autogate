@@ -56,6 +56,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
       fullAutoPresetName: auto         # 全自动模式预设键（默认 auto）：LLM 裁决为最终决定，不再人工弹窗
       classifierTimeoutMs: 8000        # 分类器超时（100–60000ms），超时 fail-closed
       classifierMaxOutputTokens: 1024  # 分类器输出上限（64–4096）
+      classifierRetry: false           # 分类器输出解析失败时静默重试一次（默认关闭）
       # classifierPrompt: |              # 审查（分类）系统提示词，留空用内置默认
       #   （自定义审查提示词，按目标/类型/可逆性/影响判断）
       # 固定分类模型（默认复用当前会话的 provider/model；两字段须成对）
