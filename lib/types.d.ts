@@ -29,3 +29,5 @@ export interface SafetyClassifier {
 }
 /** 供策略函数复用的最小执行字段。 */
 export type PendingExecution = Pick<ToolExecution, 'name' | 'arguments' | 'agent' | 'signal'>;
+/** 托管权限模式：半自动（保留人工兜底弹窗）/ 全自动（无人工兜底，全部交由 LLM 裁决）。 */
+export type ManagedMode = 'semi-auto' | 'full-auto';

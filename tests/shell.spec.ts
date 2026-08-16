@@ -22,6 +22,20 @@ describe('hardDenyShellReason', () => {
     expect(hardDenyShellReason('killall node', 'bash', roots, 'zh')).toContain('自毁或系统级命令')
     expect(hardDenyShellReason('rm -rf /', 'bash', roots, 'zh')).toContain('删除文件系统根')
   })
+
+  it('提权理由按托管模式区分（半自动/全自动/缺省中性）', () => {
+    expect(hardDenyShellReason('sudo rm -rf /ws', 'bash', roots, 'zh', 'semi-auto')).toBe('半自动模式不允许提权')
+    expect(hardDenyShellReason('sudo rm -rf /ws', 'bash', roots, 'zh', 'full-auto')).toBe('全自动模式不允许提权')
+    expect(hardDenyShellReason('sudo rm -rf /ws', 'bash', roots, 'zh')).toBe('不允许提权')
+    expect(hardDenyShellReason('sudo rm -rf /ws', 'bash', roots, 'en', 'semi-auto')).toContain('semi-auto mode')
+    expect(hardDenyShellReason('sudo rm -rf /ws', 'bash', roots, 'en', 'full-auto')).toContain('full-auto mode')
+    expect(hardDenyShellReason('sudo rm -rf /ws', 'bash', roots, 'en')).toBe('privilege escalation is not permitted')
+  })
+
+  it('tokenize 引号拼接绕过路径的提权理由同样按模式区分', () => {
+    expect(assessShell("s'u'do ls", 'bash', roots, 'zh', 'semi-auto').reason).toBe('半自动模式不允许提权')
+    expect(assessShell("s'u'do ls", 'bash', roots, 'zh', 'full-auto').reason).toBe('全自动模式不允许提权')
+  })
 })
 
 describe('assessShell', () => {

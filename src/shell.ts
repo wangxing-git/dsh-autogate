@@ -1,6 +1,6 @@
 import { basename } from 'node:path'
 import { globStaticPrefix, hardDestructiveTargetReason, isWithin, normalizePath, type PolicyRoots } from './paths.js'
-import type { Assessment } from './types.js'
+import type { Assessment, ManagedMode } from './types.js'
 import { reasonText, type UiLocale } from './i18n.js'
 
 export type ShellKind = 'bash' | 'pwsh'
@@ -16,6 +16,13 @@ function deny(reason: string): Assessment {
 /** 模糊操作交给 LLM 分类器裁决。 */
 function classify(reason: string): Assessment {
   return { decision: 'ask', reason }
+}
+
+/** 提权硬 deny 理由：按托管模式区分半自动/全自动；模式缺省时用中性表述（仅直接调用测试路径）。 */
+function privilegeReason(mode: ManagedMode | undefined, locale: UiLocale | undefined): string {
+  const zh = mode === 'semi-auto' ? '半自动模式不允许提权' : mode === 'full-auto' ? '全自动模式不允许提权' : '不允许提权'
+  const en = mode === 'semi-auto' ? 'privilege escalation is not permitted in semi-auto mode' : mode === 'full-auto' ? 'privilege escalation is not permitted in full-auto mode' : 'privilege escalation is not permitted'
+  return reasonText(locale, zh, en)
 }
 
 // ---- 硬 deny 正则（guard 与 pre-execute 共用，确定性零成本） ----
@@ -39,9 +46,9 @@ const SENSITIVE_MARKER = /(?:\.ssh[\\/]|\.gnupg[\\/]|\.aws[\\/]|\.kube[\\/]|\.cr
 const NETWORK_COMMAND = /(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod)/i
 
 /** 确定性硬 deny：不依赖解析器，直接正则熔断。 */
-export function hardDenyShellReason(source: string, _shell: ShellKind, _roots: PolicyRoots, locale?: UiLocale): string | undefined {
+export function hardDenyShellReason(source: string, _shell: ShellKind, _roots: PolicyRoots, locale?: UiLocale, mode?: ManagedMode): string | undefined {
   const compact = source.trim()
-  if (PRIVILEGE_ESCALATION.test(compact)) return reasonText(locale, 'auto 模式不允许提权', 'privilege escalation is not permitted by auto mode')
+  if (PRIVILEGE_ESCALATION.test(compact)) return privilegeReason(mode, locale)
   if (SELF_DESTRUCTIVE.test(compact)) return reasonText(locale, '不允许自毁或系统级命令', 'self-destructive or system-level command is not permitted')
   if (NETWORK_COMMAND.test(compact) && SENSITIVE_MARKER.test(compact)) return reasonText(locale, '不允许凭据或私密数据外传', 'credential or private-data exfiltration pattern is not permitted')
   if (/rm\s+(?:-[a-z]*[fr][a-z]*\s+)*\/(?:\s|$)/.test(compact)) return reasonText(locale, '不允许删除文件系统根', 'deleting the filesystem root is not permitted')
@@ -160,8 +167,8 @@ function assessDestructive(name: string, tokens: string[], roots: PolicyRoots, l
 }
 
 /** 主入口：先硬 deny，再按命令分类，复杂/动态结构一律 fail-closed。 */
-export function assessShell(source: string, shell: ShellKind, roots: PolicyRoots, locale?: UiLocale): Assessment {
-  const hard = hardDenyShellReason(source, shell, roots, locale)
+export function assessShell(source: string, shell: ShellKind, roots: PolicyRoots, locale?: UiLocale, mode?: ManagedMode): Assessment {
+  const hard = hardDenyShellReason(source, shell, roots, locale, mode)
   if (hard !== undefined) return deny(hard)
 
   const compact = source.trim()
@@ -181,7 +188,7 @@ export function assessShell(source: string, shell: ShellKind, roots: PolicyRoots
   const name = commandName(rawName)
 
   // 提权/自毁命令：即使原始正则被引号拼接（如 s'u'do）绕过，tokenize 后仍能确定性拒绝。
-  if (PRIVILEGE_ESCALATION_COMMANDS.has(name)) return deny(reasonText(locale, 'auto 模式不允许提权', 'privilege escalation is not permitted by auto mode'))
+  if (PRIVILEGE_ESCALATION_COMMANDS.has(name)) return deny(privilegeReason(mode, locale))
   if (SELF_DESTRUCTIVE_COMMANDS.has(name)) return deny(reasonText(locale, '不允许自毁或系统级命令', 'self-destructive or system-level command is not permitted'))
 
   if (isNestedInterpreter(name, tokens)) {

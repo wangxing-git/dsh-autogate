@@ -311,7 +311,16 @@ describe('preflight 开关（沙盒前拦截判断）', () => {
     const { ctx, guards } = createMockContext(allowChunks)
     apply(ctx as any)
     const exec = { name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-preflight-hd', agent: autoAgent(), signal: undefined }
-    expect(guards[0](exec as any)).toBe('auto 模式不允许提权')
+    expect(guards[0](exec as any)).toBe('半自动模式不允许提权')
+  })
+
+  it('提权硬 deny 理由随托管模式区分（半自动/全自动）', () => {
+    const { ctx, guards } = createMockContext(allowChunks)
+    apply(ctx as any)
+    const semi = { name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-mode-semi', agent: agentWithPreset('auto-ask'), signal: undefined }
+    const full = { name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-mode-full', agent: agentWithPreset('auto'), signal: undefined }
+    expect(guards[0](semi as any)).toBe('半自动模式不允许提权')
+    expect(guards[0](full as any)).toBe('全自动模式不允许提权')
   })
 })
 

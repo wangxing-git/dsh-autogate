@@ -7,7 +7,7 @@ import { CLASSIFIER_SYSTEM_PROMPT, createDshClassifier, createHttpClassifier, ex
 import { resolveRoots, type RootOptions } from './paths.js'
 import { assessTool, hardDenyReason, hasSandboxEscalation, isSandboxEscalationRetry, summarizeToolArguments } from './policy.js'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
-import type { SafetyClassifier } from './types.js'
+import type { ManagedMode, SafetyClassifier } from './types.js'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { createApprovalTrail, type ApprovalDecision, type ApprovalLayer } from './trail.js'
 import type { UiLocale } from './i18n.js'
@@ -37,9 +37,6 @@ export const SEMI_AUTO_PERMISSION_PRESET = 'auto-ask'
 
 /** 全自动权限预设键（LLM 全权裁决，不再人工兜底弹窗）。 */
 export const AUTO_PERMISSION_PRESET = 'auto'
-
-/** 托管权限模式：半自动（保留人工兜底弹窗）/ 全自动（无人工兜底，全部交由 LLM 裁决）。 */
-export type ManagedMode = 'semi-auto' | 'full-auto'
 
 /** 宿主策略配置。 */
 export interface Config {
@@ -420,7 +417,10 @@ export function apply(ctx: Context, config: Config = {}): void {
   const isAutoExecution = (exec: Readonly<ToolExecution>) => authorityFor(exec) !== undefined
 
   // 同步硬 deny：单调 guard，后续监听器/分类器无法覆盖。
-  ctx.tools.guard(exec => isAutoExecution(exec) ? hardDenyReason(exec, rootsFor(exec), uiLocale) : undefined)
+  ctx.tools.guard(exec => {
+    const authority = authorityFor(exec)
+    return authority !== undefined ? hardDenyReason(exec, rootsFor(exec), uiLocale, authority.mode) : undefined
+  })
 
   // 异步判定：allow 放行 / deny 拒绝 / 无法静态分类转人工或交 LLM 两态裁决。
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
@@ -451,7 +451,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (!preflight) return next()
 
     const roots = rootsFor(exec)
-    const assessment = assessTool(exec, roots, uiLocale)
+    const assessment = assessTool(exec, roots, uiLocale, authorityFor(exec)?.mode)
     if (assessment.decision === 'deny') {
       recordTrail(exec, 'deny', 'L0', assessment.reason, Date.now() - startedAt)
       return { kind: 'deny', reason: '[autogate hard deny] ' + assessment.reason }

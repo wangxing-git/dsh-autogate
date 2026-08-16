@@ -1,7 +1,7 @@
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { hardDestructiveTargetReason, isCriticalPath, isProtectedProjectPath, isSensitiveConfigFile, isWithin, normalizePath, type PolicyRoots } from './paths.js'
 import { assessShell, hardDenyShellReason } from './shell.js'
-import type { Assessment } from './types.js'
+import type { Assessment, ManagedMode } from './types.js'
 import { reasonText, type UiLocale } from './i18n.js'
 
 function allow(reason: string): Assessment {
@@ -71,11 +71,11 @@ function containsCredentialMaterial(argumentsValue: unknown): boolean {
 }
 
 /** 同步硬 deny：供 ctx.tools.guard() 与 pre-execute 共用，后续监听器无法覆盖。 */
-export function hardDenyReason(exec: Readonly<ToolExecution>, roots: PolicyRoots, locale?: UiLocale): string | undefined {
+export function hardDenyReason(exec: Readonly<ToolExecution>, roots: PolicyRoots, locale?: UiLocale, mode?: ManagedMode): string | undefined {
   const name = exec.name
   const args = record(exec.arguments)
   if ((name === 'bash' || name === 'pwsh') && typeof args?.command === 'string') {
-    return hardDenyShellReason(args.command, name, roots, locale)
+    return hardDenyShellReason(args.command, name, roots, locale, mode)
   }
   if ((/^(?:web_fetch|web_search|curl|wget)/i.test(name) || EXTERNAL_WRITE_TOOLS.has(name)) && containsCredentialMaterial(exec.arguments)) {
     return reasonText(locale, '外部调用包含凭据或私钥材料', 'external call contains credential or private-key material')
@@ -103,15 +103,15 @@ export function hardDenyReason(exec: Readonly<ToolExecution>, roots: PolicyRoots
  * - deny：硬危险（关键路径、凭据外传、提权）；
  * - ask：模糊 / 语义危险操作交 LLM 两态裁决。
  */
-export function assessTool(exec: Readonly<ToolExecution>, roots: PolicyRoots, locale?: UiLocale): Assessment {
-  const hard = hardDenyReason(exec, roots, locale)
+export function assessTool(exec: Readonly<ToolExecution>, roots: PolicyRoots, locale?: UiLocale, mode?: ManagedMode): Assessment {
+  const hard = hardDenyReason(exec, roots, locale, mode)
   if (hard !== undefined) return deny(hard)
 
   const name = exec.name
   const args = record(exec.arguments)
 
   if ((name === 'bash' || name === 'pwsh') && typeof args?.command === 'string') {
-    return assessShell(args.command, name, roots, locale)
+    return assessShell(args.command, name, roots, locale, mode)
   }
   if (name === 'bash' || name === 'pwsh') {
     return allow(name + reasonText(locale, ' 命令参数缺失或无效；workspace-write 沙箱适用', ' command argument is missing or invalid; workspace-write sandbox applies'))

@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
 import type { ToolExecution } from '@deepseek-ai/dsh-tools';
+import type { ManagedMode } from './types.js';
 export * from './paths.js';
 export * from './policy.js';
 export * from './shell.js';
@@ -13,8 +14,6 @@ export declare const inject: string[];
 export declare const SEMI_AUTO_PERMISSION_PRESET = "auto-ask";
 /** 全自动权限预设键（LLM 全权裁决，不再人工兜底弹窗）。 */
 export declare const AUTO_PERMISSION_PRESET = "auto";
-/** 托管权限模式：半自动（保留人工兜底弹窗）/ 全自动（无人工兜底，全部交由 LLM 裁决）。 */
-export type ManagedMode = 'semi-auto' | 'full-auto';
 /** 宿主策略配置。 */
 export interface Config {
     /** 半自动权限预设键（默认 auto-ask）：危险操作转人工兜底弹窗。 */

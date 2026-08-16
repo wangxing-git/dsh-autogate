@@ -206,3 +206,16 @@ describe('assessTool symlink 逃逸加固', () => {
     expect(assessment.reason).toContain('critical path')
   })
 })
+
+describe('提权理由按托管模式区分', () => {
+  it('hardDenyReason 透传 mode', () => {
+    expect(hardDenyReason(execution('bash', { command: 'sudo rm -rf /' }), roots, 'zh', 'semi-auto')).toBe('半自动模式不允许提权')
+    expect(hardDenyReason(execution('bash', { command: 'sudo rm -rf /' }), roots, 'zh', 'full-auto')).toBe('全自动模式不允许提权')
+    expect(hardDenyReason(execution('bash', { command: 'sudo rm -rf /' }), roots, 'zh')).toBe('不允许提权')
+  })
+
+  it('assessTool 透传 mode', () => {
+    expect(assessTool(execution('bash', { command: 'sudo rm -rf /' }), roots, 'zh', 'full-auto').reason).toBe('全自动模式不允许提权')
+    expect(assessTool(execution('bash', { command: 'sudo rm -rf /' }), roots, 'en', 'semi-auto').reason).toBe('privilege escalation is not permitted in semi-auto mode')
+  })
+})
