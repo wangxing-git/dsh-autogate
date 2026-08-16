@@ -165,8 +165,8 @@ describe('apply 注册的 escalation answerer（approval/request）', () => {
     expect(await answerer(req, next)).toBe('allowed-once')
     // 分类器收到原始 file_path（content 按规则脱敏）
     const lastInput = JSON.parse(capturedCalls[capturedCalls.length - 1].messages[0].content[0].text)
-    expect(lastInput.arguments.file_path).toBe('/Users/wangxing/autogate-l2-probe.txt')
-    expect(lastInput.arguments.content).toBe('[redacted-content:5-chars]')
+    expect(lastInput.arguments.file_path).toBe('<untrusted>/Users/wangxing/autogate-l2-probe.txt</untrusted>')
+    expect(lastInput.arguments.content).toBe('<untrusted>[redacted-content:5-chars]</untrusted>')
   })
 
   it('escalation 分类器收到原始工具参数（bash command），而非仅 justification', async () => {
@@ -186,7 +186,25 @@ describe('apply 注册的 escalation answerer（approval/request）', () => {
     const next = async (): Promise<ApprovalOutcome> => 'rejected'
     await answerer(req, next)
     const lastInput = JSON.parse(capturedCalls[capturedCalls.length - 1].messages[0].content[0].text)
-    expect(lastInput.arguments.command).toBe('echo hello > /tmp/x')
+    expect(lastInput.arguments.command).toBe('<untrusted>echo hello > /tmp/x</untrusted>')
+  })
+
+  it('escalation 分类器 policyReason 使用脱敏 justification（密钥不进入分类器）', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any)
+    const answerer = listeners.get('approval/request')![0]
+    const req = {
+      agent: autoAgent(),
+      toolName: 'bash',
+      reason: 'escalate sandbox to danger-full-access: 用户要求清理 api_key=supersecretvalue',
+      signal: undefined,
+    }
+    const next = async (): Promise<ApprovalOutcome> => 'rejected'
+    await answerer(req, next)
+    const lastInput = JSON.parse(capturedCalls[capturedCalls.length - 1].messages[0].content[0].text)
+    expect(lastInput.policyReason).toContain('api_key=[redacted-secret]')
+    expect(lastInput.policyReason).not.toContain('supersecretvalue')
+    expect(lastInput.policyReason).not.toContain('escalate sandbox to')
   })
 
   it('escalation 审批时 ask_user_question 问答对进入分类器上下文（识别用户授权）', async () => {
@@ -414,7 +432,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
       userMessage('允许清理'),
     ])
     await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-trust2'), async () => ({ kind: 'allow' }))
-    expect(classifierInput(capturedCalls).trustedUserMessages).toEqual(['允许清理'])
+    expect(classifierInput(capturedCalls).trustedUserMessages).toEqual(['<user-authority>允许清理</user-authority>'])
   })
 
   it('最多取最近 8 条直接人类消息', async () => {
@@ -427,7 +445,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
     await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-trust3'), async () => ({ kind: 'allow' }))
     const messages = classifierInput(capturedCalls).trustedUserMessages
     expect(messages).toHaveLength(8)
-    expect(messages).toEqual(['允许操作 3', '允许操作 4', '允许操作 5', '允许操作 6', '允许操作 7', '允许操作 8', '允许操作 9', '允许操作 10'])
+    expect(messages).toEqual(['<user-authority>允许操作 3</user-authority>', '<user-authority>允许操作 4</user-authority>', '<user-authority>允许操作 5</user-authority>', '<user-authority>允许操作 6</user-authority>', '<user-authority>允许操作 7</user-authority>', '<user-authority>允许操作 8</user-authority>', '<user-authority>允许操作 9</user-authority>', '<user-authority>允许操作 10</user-authority>'])
   })
 
   // ask_user_question 的 tool/call 事件（问题随未解析的 JSON 参数落盘）。

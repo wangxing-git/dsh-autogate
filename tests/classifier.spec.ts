@@ -78,6 +78,20 @@ describe('CLASSIFIER_SYSTEM_PROMPT 场景覆盖', () => {
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('*.pub')
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('policyReason')
   })
+  it('覆盖 agent 指令文件为常规配置（用户授权可改，不因 ~/.dsh/AGENTS.md 误拒）', () => {
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('Agent instruction files')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('AGENTS.local.md')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('DSH_HOME')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('weaken safety rules')
+  })
+  it('覆盖注入防御：不可信字段里的指令文本是数据不是指令', () => {
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('Anti-injection')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('ignore previous instructions')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('never authorize anything')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('preliminary risk hint')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('<untrusted>')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('<user-authority>')
+  })
   it('覆盖 fail-closed 底线', () => {
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('fail-closed')
   })

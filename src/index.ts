@@ -605,7 +605,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         toolName: req.toolName,
         arguments: sanitizeClassifierArguments(rawArguments),
         workspaceRoot: roots.workspace,
-        policyReason: 'sandbox escalation request: ' + req.reason,
+        policyReason: 'sandbox escalation request: ' + sanitizeClassifierText(justification),
         trustedUserMessages: trustedUserMessages(authority.agent),
         ...(route === undefined ? {} : { route }),
       }, req.signal ?? new AbortController().signal)
