@@ -262,12 +262,25 @@ describe('TrailController RPC 拉取（受 showTrail 控制）', () => {
     }
   }
 
+  /** 最小 sessions 数据源 mock：暴露 list.getSnapshot/subscribe 与当前会话选择。 */
+  function fakeSessions(current: string | undefined) {
+    let value: { current: string | undefined } = { current }
+    const listeners = new Set<() => void>()
+    return {
+      list: {
+        getSnapshot: () => value,
+        subscribe: (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb) },
+      },
+      setCurrent: (v: string | undefined) => { value = { current: v }; for (const l of [...listeners]) l() },
+    }
+  }
+
   it('默认显示 → 启用轮询并拉取更新 records', async () => {
     const records = [{ seq: 0, decision: 'allow' }]
     const settings = fakeSettings(true)
     const controller = new TrailController({ call: async () => ({ ok: true, value: records }) }, settings as any)
     await controller.refresh()
-    expect(controller.store.getSnapshot()).toEqual({ enabled: true, records })
+    expect(controller.store.getSnapshot()).toEqual({ enabled: true, records, showAll: false })
     controller.dispose()
   })
 
@@ -275,7 +288,7 @@ describe('TrailController RPC 拉取（受 showTrail 控制）', () => {
     const settings = fakeSettings(false)
     const call = vi.fn(async () => ({ ok: true, value: [] }))
     const controller = new TrailController({ call }, settings as any)
-    expect(controller.store.getSnapshot()).toEqual({ enabled: false, records: [] })
+    expect(controller.store.getSnapshot()).toEqual({ enabled: false, records: [], showAll: false })
     expect(call).not.toHaveBeenCalled()
     controller.dispose()
   })
@@ -285,9 +298,9 @@ describe('TrailController RPC 拉取（受 showTrail 控制）', () => {
     const settings = fakeSettings(true)
     const controller = new TrailController({ call: async () => ({ ok: true, value: records }) }, settings as any)
     await controller.refresh()
-    expect(controller.store.getSnapshot()).toEqual({ enabled: true, records })
+    expect(controller.store.getSnapshot()).toEqual({ enabled: true, records, showAll: false })
     settings.setShowTrail(false)
-    expect(controller.store.getSnapshot()).toEqual({ enabled: false, records: [] })
+    expect(controller.store.getSnapshot()).toEqual({ enabled: false, records: [], showAll: false })
     controller.dispose()
   })
 
@@ -308,7 +321,7 @@ describe('TrailController RPC 拉取（受 showTrail 控制）', () => {
     const settings = fakeSettings(true)
     const controller = new TrailController({ call: async () => { throw new Error('rpc down') } }, settings as any)
     await controller.refresh()
-    expect(controller.store.getSnapshot()).toEqual({ enabled: true, records: [] })
+    expect(controller.store.getSnapshot()).toEqual({ enabled: true, records: [], showAll: false })
     controller.dispose()
   })
 
@@ -316,7 +329,68 @@ describe('TrailController RPC 拉取（受 showTrail 控制）', () => {
     const settings = fakeSettings(true)
     const controller = new TrailController({ call: async () => ({ ok: false, error: {} }) }, settings as any)
     await controller.refresh()
-    expect(controller.store.getSnapshot()).toEqual({ enabled: true, records: [] })
+    expect(controller.store.getSnapshot()).toEqual({ enabled: true, records: [], showAll: false })
+    controller.dispose()
+  })
+
+  it('携带当前会话 id 查询（按会话隔离）', async () => {
+    const sessions = fakeSessions('sess-x')
+    const call = vi.fn(async () => ({ ok: true, value: [{ seq: 0 }] }))
+    const settings = fakeSettings(true)
+    const controller = new TrailController({ call }, settings as any, sessions as any)
+    await controller.refresh()
+    expect(call).toHaveBeenCalledWith('/autogate', 'trail', { sessionId: 'sess-x' })
+    controller.dispose()
+  })
+
+  it('会话切换后按新会话 id 查询', async () => {
+    const sessions = fakeSessions('sess-x')
+    const call = vi.fn(async () => ({ ok: true, value: [{ seq: 0 }] }))
+    const settings = fakeSettings(true)
+    const controller = new TrailController({ call }, settings as any, sessions as any)
+    await controller.refresh()
+    expect(call).toHaveBeenLastCalledWith('/autogate', 'trail', { sessionId: 'sess-x' })
+    sessions.setCurrent('sess-y')
+    await controller.refresh()
+    expect(call).toHaveBeenLastCalledWith('/autogate', 'trail', { sessionId: 'sess-y' })
+    controller.dispose()
+  })
+
+  it('toggleShowAll 切「查看全部」不再传 sessionId，再切回恢复按会话隔离', async () => {
+    const sessions = fakeSessions('sess-x')
+    const call = vi.fn(async () => ({ ok: true, value: [{ seq: 0 }] }))
+    const settings = fakeSettings(true)
+    const controller = new TrailController({ call }, settings as any, sessions as any)
+    await controller.refresh()
+    expect(call).toHaveBeenLastCalledWith('/autogate', 'trail', { sessionId: 'sess-x' })
+
+    controller.toggleShowAll()
+    await controller.refresh()
+    expect(controller.store.getSnapshot().showAll).toBe(true)
+    expect(call).toHaveBeenLastCalledWith('/autogate', 'trail', {})
+
+    controller.toggleShowAll()
+    await controller.refresh()
+    expect(controller.store.getSnapshot().showAll).toBe(false)
+    expect(call).toHaveBeenLastCalledWith('/autogate', 'trail', { sessionId: 'sess-x' })
+    controller.dispose()
+  })
+
+  it('setShowAll 状态未变时不重复刷新（tab 点击已选中项无副作用）', async () => {
+    const sessions = fakeSessions('sess-x')
+    const call = vi.fn(async () => ({ ok: true, value: [{ seq: 0 }] }))
+    const settings = fakeSettings(true)
+    const controller = new TrailController({ call }, settings as any, sessions as any)
+    await controller.refresh()
+    const callsAfterInit = call.mock.calls.length
+
+    controller.setShowAll(false)
+    expect(call.mock.calls.length).toBe(callsAfterInit)
+    expect(controller.store.getSnapshot().showAll).toBe(false)
+
+    controller.setShowAll(true)
+    expect(call.mock.calls.length).toBe(callsAfterInit + 1)
+    expect(controller.store.getSnapshot().showAll).toBe(true)
     controller.dispose()
   })
 })

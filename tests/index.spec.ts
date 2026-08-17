@@ -5,8 +5,8 @@ import { apply, autoPermissionAuthority, isAutoPermissionExecution, managedPermi
 /** approval/request 监听器签名（集成测试里以宽松类型捕获）。 */
 type ApprovalListener = (req: any, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>
 
-/** 构造最小可用的 mock Context，捕获各类事件监听器。 */
-function createMockContext(chunks: any[] | null) {
+/** 构造最小可用的 mock Context，捕获各类事件监听器。agentsMap 可选：提供 parentSession → agent 的查找，用于子代理归属测试。 */
+function createMockContext(chunks: any[] | null, agentsMap?: Map<string, unknown>) {
   const listeners = new Map<string, ApprovalListener[]>()
   const capturedCalls: any[] = []
   const guards: ((exec: any) => string | undefined)[] = []
@@ -41,6 +41,7 @@ function createMockContext(chunks: any[] | null) {
     // connection 由 inject 注入的子 ctx 经 get('connection') 读取；其余服务（agents 等）返回 undefined。
     get(name: string) {
       if (name === 'connection') return connection
+      if (name === 'agents' && agentsMap !== undefined) return { get: (id: unknown) => agentsMap.get(String(id)) }
       return undefined
     },
     effect() { return () => {} },
@@ -53,18 +54,18 @@ function autoAgent() {
   return {
     session: {
       events: [{ type: 'permission/preset', data: { preset: 'auto-ask' } }],
-      header: { cwd: '/ws' },
+      header: { cwd: '/ws', id: 'sess-auto' },
     },
     options: { provider: 'deepseek', model: 'deepseek-chat' },
   }
 }
 
 /** 指定权限预设的 mock agent。 */
-function agentWithPreset(preset: string) {
+function agentWithPreset(preset: string, id = 'sess-preset') {
   return {
     session: {
       events: [{ type: 'permission/preset', data: { preset } }],
-      header: { cwd: '/ws' },
+      header: { cwd: '/ws', id },
     },
     options: { provider: 'deepseek', model: 'deepseek-chat' },
   }
@@ -292,6 +293,52 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
     const records = (result as any).value
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({ callId: 'call-2', toolName: 'read', decision: 'allow', layer: 'L0' })
+  })
+
+  it('trail 按 sessionId 过滤：只返回当前会话的记录', async () => {
+    const { ctx, listeners, rpcHandlers } = createMockContext(allowChunks)
+    apply(ctx as any, { preflight: true })
+    const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
+    await preExecute({ name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-a', agent: agentWithPreset('auto-ask', 'sess-a'), signal: undefined }, async () => ({ kind: 'allow' }))
+    await preExecute({ name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-b', agent: agentWithPreset('auto-ask', 'sess-b'), signal: undefined }, async () => ({ kind: 'allow' }))
+
+    const handler = rpcHandlers.get('/autogate')!
+    const all = await handler('trail', undefined, undefined as any)
+    expect((all as any).value).toHaveLength(2)
+
+    const byA = await handler('trail', { sessionId: 'sess-a' }, undefined as any)
+    expect((byA as any).value).toHaveLength(1)
+    expect((byA as any).value[0].callId).toBe('call-a')
+    expect((byA as any).value[0].sessionId).toBe('sess-a')
+  })
+
+  it('子代理工具调用的轨迹归到顶层父会话（按父会话 id 可查，按子会话 id 查不到）', async () => {
+    const parent = {
+      session: {
+        events: [{ type: 'permission/preset', data: { preset: 'auto-ask' } }],
+        header: { cwd: '/ws', id: 'sess-parent', origin: 'primary' },
+      },
+      options: { provider: 'deepseek', model: 'deepseek-chat' },
+    }
+    const child = {
+      session: {
+        events: [],
+        header: { cwd: '/ws', id: 'sess-child', origin: 'subagent', parentSession: 'sess-parent' },
+      },
+      options: { provider: 'deepseek', model: 'deepseek-chat' },
+    }
+    const { ctx, listeners, rpcHandlers } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
+    apply(ctx as any, { preflight: true })
+    const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
+    await preExecute({ name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-child', agent: child, signal: undefined }, async () => ({ kind: 'allow' }))
+
+    const handler = rpcHandlers.get('/autogate')!
+    const byParent = await handler('trail', { sessionId: 'sess-parent' }, undefined as any)
+    expect((byParent as any).value).toHaveLength(1)
+    expect((byParent as any).value[0]).toMatchObject({ callId: 'call-child', sessionId: 'sess-parent' })
+
+    const byChild = await handler('trail', { sessionId: 'sess-child' }, undefined as any)
+    expect((byChild as any).value).toHaveLength(0)
   })
 
   it('RPC 未知端点返回 internal 错误', async () => {

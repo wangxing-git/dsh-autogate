@@ -42,4 +42,13 @@ describe('createApprovalTrail', () => {
     snapshot.pop()
     expect(trail.snapshot()).toHaveLength(1)
   })
+
+  it('记录 sessionId 供按会话隔离；缺省时为空字符串', () => {
+    const trail = createApprovalTrail()
+    trail.record({ callId: 'a', toolName: 'bash', summary: 'ls', decision: 'allow', layer: 'L0', reason: '只读', durationMs: 1, sessionId: 'sess-1' })
+    trail.record({ callId: 'b', toolName: 'read', summary: '/ws/x.ts', decision: 'deny', layer: 'L1', reason: '危险', durationMs: 250 })
+    const snapshot = trail.snapshot()
+    expect(snapshot[0].sessionId).toBe('sess-1')
+    expect(snapshot[1].sessionId).toBe('')
+  })
 })

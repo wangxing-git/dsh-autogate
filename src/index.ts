@@ -61,6 +61,13 @@ function parseWritePayload(payload: unknown): { set: Record<string, unknown>; un
   return { set: set as Record<string, unknown>, unset }
 }
 
+/** 从 trail 查询载荷提取 sessionId（非空字符串）；缺失或非法时返回 undefined，表示不过滤。 */
+function trailSessionId(payload: unknown): string | undefined {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined
+  const value = (payload as Record<string, unknown>).sessionId
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
 /** 半自动权限预设键（自动但危险时转人工兜底弹窗；默认档）。 */
 export const SEMI_AUTO_PERMISSION_PRESET = 'auto-ask'
 
@@ -566,17 +573,6 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   // 审批轨迹：进程级环形缓冲，记录每次 Auto 决策供客户端面板拉取展示。
   const trail = createApprovalTrail()
-  const recordTrail = (exec: Readonly<ToolExecution>, decision: ApprovalDecision, layer: ApprovalLayer, reason: string, durationMs: number): void => {
-    trail.record({
-      callId: exec.callId === undefined ? '' : String(exec.callId),
-      toolName: exec.name,
-      summary: summarizeToolArguments(exec.name, exec.arguments),
-      decision,
-      layer,
-      reason,
-      durationMs,
-    })
-  }
 
   // 带 sandbox_permissions 的提权重试：pre-execute 放行时缓存原始参数；
   // ApprovalRequest 不携带 arguments，approval/request 阶段按 callId 取回供分类器判断具体目标。
@@ -585,7 +581,26 @@ export function apply(ctx: Context, config: Config = {}): void {
   const rootsFor = (exec: Readonly<ToolExecution>) => resolveRoots(exec.agent?.session.header.cwd, rootOptions)
   const parentAgent: ParentAgentLookup = sessionId => ctx.get('agents')?.get(sessionId)
   const authorityFor = (exec: Readonly<ToolExecution>) => managedPermissionAuthority(exec.agent, parentAgent, presetName, fullAutoPresetName)
-  const isAutoExecution = (exec: Readonly<ToolExecution>) => authorityFor(exec) !== undefined
+
+  /** 取 agent 所属会话的 id（字符串）；无 agent 或无 header.id 时返回空字符串。 */
+  const sessionIdOf = (agent: ToolExecution['agent']): string => {
+    const id = agent?.session.header.id
+    return id === undefined ? '' : String(id)
+  }
+
+  /** 审批轨迹记录：authority 由调用方解析后传入（避免每条记录重复沿 parentSession 链查找），sessionId 取授权会话保证按当前会话隔离查询。 */
+  const recordTrail = (exec: Readonly<ToolExecution>, authority: ReturnType<typeof authorityFor>, decision: ApprovalDecision, layer: ApprovalLayer, reason: string, durationMs: number): void => {
+    trail.record({
+      callId: exec.callId === undefined ? '' : String(exec.callId),
+      toolName: exec.name,
+      summary: summarizeToolArguments(exec.name, exec.arguments),
+      decision,
+      layer,
+      reason,
+      durationMs,
+      sessionId: sessionIdOf(authority?.agent ?? exec.agent),
+    })
+  }
 
   // 同步硬 deny：单调 guard，后续监听器/分类器无法覆盖。
   ctx.tools.guard(exec => {
@@ -594,13 +609,14 @@ export function apply(ctx: Context, config: Config = {}): void {
     const reason = hardDenyReason(exec, rootsFor(exec), uiLocale, authority.mode)
     // 同步硬 deny 同样落入审批轨迹：guard 阶段直接拒绝，不会进入 pre-execute，
     // 因此需在此处记录，否则轨迹面板看不到这类决策。
-    if (reason !== undefined) recordTrail(exec, 'deny', 'L0', reason, 0)
+    if (reason !== undefined) recordTrail(exec, authority, 'deny', 'L0', reason, 0)
     return reason
   })
 
   // 异步判定：allow 放行 / deny 拒绝 / 无法静态分类转人工或交 LLM 两态裁决。
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
-    if (!isAutoExecution(exec)) return next()
+    const authority = authorityFor(exec)
+    if (authority === undefined) return next()
 
     // 审批耗时：从进入审批管道到做出决策的墙钟毫秒数（L0 规则 / L1 LLM 分类）。
     const startedAt = Date.now()
@@ -627,20 +643,19 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (!preflight) return next()
 
     const roots = rootsFor(exec)
-    const assessment = assessTool(exec, roots, uiLocale, authorityFor(exec)?.mode)
+    const assessment = assessTool(exec, roots, uiLocale, authority.mode)
     if (assessment.decision === 'deny') {
-      recordTrail(exec, 'deny', 'L0', assessment.reason, Date.now() - startedAt)
+      recordTrail(exec, authority, 'deny', 'L0', assessment.reason, Date.now() - startedAt)
       return { kind: 'deny', reason: '[autogate hard deny] ' + assessment.reason }
     }
     if (assessment.decision === 'allow') {
-      recordTrail(exec, 'allow', 'L0', assessment.reason, Date.now() - startedAt)
+      recordTrail(exec, authority, 'allow', 'L0', assessment.reason, Date.now() - startedAt)
       return next()
     }
     // 剩余均为交 LLM 两态裁决的模糊/危险操作。
     try {
-      const authority = authorityFor(exec)
-      const route = modelRoute(exec.agent) ?? modelRoute(authority?.agent)
-      const { messages: trustedMessages, contexts: proposalContexts } = trustedUserMessages(authority?.agent, {
+      const route = modelRoute(exec.agent) ?? modelRoute(authority.agent)
+      const { messages: trustedMessages, contexts: proposalContexts } = trustedUserMessages(authority.agent, {
         maxMessageLen: proposalContextMaxMessageLen,
         maxChars: proposalContextMaxChars,
         maxTotalChars: proposalContextMaxTotalChars,
@@ -655,14 +670,14 @@ export function apply(ctx: Context, config: Config = {}): void {
         ...(route === undefined ? {} : { route }),
       }, exec.signal)
       if (decision.decision === 'allow') {
-        recordTrail(exec, 'allow', 'L1', decision.reason, Date.now() - startedAt)
+        recordTrail(exec, authority, 'allow', 'L1', decision.reason, Date.now() - startedAt)
         return next()
       }
-      recordTrail(exec, 'deny', 'L1', decision.reason, Date.now() - startedAt)
+      recordTrail(exec, authority, 'deny', 'L1', decision.reason, Date.now() - startedAt)
       return { kind: 'deny', reason: '[autogate classifier deny] ' + decision.reason }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
-      recordTrail(exec, 'deny', 'L1', message, Date.now() - startedAt)
+      recordTrail(exec, authority, 'deny', 'L1', message, Date.now() - startedAt)
       return { kind: 'deny', reason: '[autogate classifier unavailable] ' + message }
     }
   })
@@ -700,13 +715,13 @@ export function apply(ctx: Context, config: Config = {}): void {
         ...(route === undefined ? {} : { route }),
       }, req.signal ?? new AbortController().signal)
       if (decision.decision === 'allow') {
-        trail.record({ callId, toolName: req.toolName, summary, decision: 'allow', layer: 'L2', reason: decision.reason, durationMs: Date.now() - startedAt })
+        trail.record({ callId, toolName: req.toolName, summary, decision: 'allow', layer: 'L2', reason: decision.reason, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent) })
         return 'allowed-once'
       }
-      trail.record({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: decision.reason, durationMs: Date.now() - startedAt })
+      trail.record({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: decision.reason, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent) })
     } catch {
       // 分类器异常：半自动 fail-closed 到人工弹窗；全自动直接拒绝。
-      trail.record({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: 'classifier unavailable', durationMs: Date.now() - startedAt })
+      trail.record({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: 'classifier unavailable', durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent) })
     }
     // 全自动：LLM 裁决为最终决定，直接拒绝不再人工弹窗；半自动：委派人工兜底。
     if (mode === 'full-auto') return 'rejected'
@@ -719,7 +734,11 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.inject(['connection'], (connCtx) => {
     const connection = connCtx.get('connection') as { rpc?: TrailRpcHost } | undefined
     const disposeTrailRpc = connection?.rpc?.handle('/autogate', async (endpoint, payload) => {
-      if (endpoint === 'trail') return { ok: true, value: trail.snapshot() }
+      if (endpoint === 'trail') {
+        const records = trail.snapshot()
+        const sessionId = trailSessionId(payload)
+        return { ok: true, value: sessionId === undefined ? records : records.filter((record) => record.sessionId === sessionId) }
+      }
       if (endpoint === 'settings.get') return settingsGet()
       if (endpoint === 'settings.write') return settingsWrite(payload)
       return { ok: false, error: { code: 'internal', message: 'unknown endpoint: ' + endpoint, details: {} } }

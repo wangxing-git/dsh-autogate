@@ -20,11 +20,15 @@ export interface ApprovalRecord {
     layer: ApprovalLayer;
     /** 拒绝原因或放行依据。 */
     reason: string;
+    /** 产生该决策的会话 id（顶层授权会话；子代理调用归属其父会话），无会话上下文时为空字符串。 */
+    sessionId: string;
 }
 /** 审批轨迹：进程级环形缓冲，只增不持久化（重启即清空）。 */
 export interface ApprovalTrail {
-    /** 追加一条记录。 */
-    record(entry: Omit<ApprovalRecord, 'seq' | 'time'>): void;
+    /** 追加一条记录；sessionId 缺省时记为空字符串（兼容无会话上下文的调用）。 */
+    record(entry: Omit<ApprovalRecord, 'seq' | 'time' | 'sessionId'> & {
+        sessionId?: string;
+    }): void;
     /** 返回当前全部记录的副本（按时间顺序）。 */
     snapshot(): ApprovalRecord[];
 }

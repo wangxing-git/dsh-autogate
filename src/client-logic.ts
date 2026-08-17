@@ -236,22 +236,43 @@ export class TrailController {
   timer: any
   rpc: any
   settings: RpcSettingsSource
+  sessions: any
   records: any[] = []
   enabled = true
-  private unsubscribe: (() => void) | undefined
+  currentSessionId: string | undefined
+  /** 是否「查看全部」：临时开关，默认 false（按当前会话隔离），刷新页面后复位。 */
+  showAll = false
+  private unsubscribeSettings: (() => void) | undefined
+  private unsubscribeSessions: (() => void) | undefined
 
-  constructor(rpc: any, settings: RpcSettingsSource) {
+  constructor(rpc: any, settings: RpcSettingsSource, sessions?: any) {
     this.rpc = rpc
     this.settings = settings
-    this.store = createSnapshotStore({ enabled: true, records: [] })
+    this.sessions = sessions
+    this.store = createSnapshotStore({ enabled: true, records: [], showAll: false })
     // 订阅 settings 快照：showTrail 变化时动态启停轮询（设置卡保存后即时生效）。
-    this.unsubscribe = settings.subscribe(() => this.sync())
+    this.unsubscribeSettings = settings.subscribe(() => this.sync())
+    // 订阅会话列表：当前会话切换时立即按新会话隔离并刷新轨迹。
+    if (sessions !== undefined && typeof sessions.list?.subscribe === 'function') {
+      this.unsubscribeSessions = sessions.list.subscribe(() => this.sync())
+    }
     this.sync()
   }
 
-  /** 依据 showTrail 配置启停轮询：关闭时清空记录并停止拉取，浮窗不再渲染。 */
+  /** 读取当前选中会话 id（无会话选中时返回 undefined）。 */
+  private resolveSessionId(): string | undefined {
+    const list = this.sessions?.list
+    if (list === undefined || typeof list.getSnapshot !== 'function') return undefined
+    const current = list.getSnapshot().current
+    return current === undefined || current === null ? undefined : String(current)
+  }
+
+  /** 依据 showTrail 配置启停轮询；当前会话切换时清空旧记录并立即刷新，保证浮窗只显示当前会话的轨迹。 */
   sync() {
     this.enabled = this.settings.getSnapshot().value?.showTrail !== false
+    const nextSessionId = this.resolveSessionId()
+    const sessionChanged = nextSessionId !== this.currentSessionId
+    this.currentSessionId = nextSessionId
     if (this.enabled && this.timer === undefined) {
       this.timer = setInterval(() => { void this.refresh() }, 2000)
       void this.refresh()
@@ -259,13 +280,19 @@ export class TrailController {
       clearInterval(this.timer)
       this.timer = undefined
       this.records = []
+    } else if (this.enabled && sessionChanged && !this.showAll) {
+      // 会话切换：非「查看全部」时立即清空上一会话的轨迹并重拉，避免短暂串显。
+      this.records = []
+      void this.refresh()
     }
     this.publish()
   }
 
   async refresh() {
+    // 「查看全部」或未选中会话 → 不传 sessionId（服务端返回全部）；否则按当前会话隔离。
+    const payload = this.showAll || this.currentSessionId === undefined ? {} : { sessionId: this.currentSessionId }
     try {
-      const result = await this.rpc.call('/autogate', 'trail', {})
+      const result = await this.rpc.call('/autogate', 'trail', payload)
       if (result !== null && typeof result === 'object' && result.ok === true && Array.isArray(result.value)) {
         this.records = result.value
         this.publish()
@@ -276,16 +303,30 @@ export class TrailController {
   }
 
   private publish() {
-    this.store.set({ enabled: this.enabled, records: this.records })
+    this.store.set({ enabled: this.enabled, records: this.records, showAll: this.showAll })
   }
 
   inject() {
-    return { hooks: { trail: this.store } }
+    return { hooks: { trail: this.store }, toggleShowAll: this.toggleShowAll, setShowAll: this.setShowAll }
+  }
+
+  /** 切换「当前会话 / 查看全部」显示范围（临时状态，刷新页面后回到默认「当前会话」隔离）。 */
+  toggleShowAll = () => {
+    this.setShowAll(!this.showAll)
+  }
+
+  /** 显式设置显示范围；状态未变化时不重复刷新（tab 点击已选中项无副作用）。 */
+  setShowAll = (value: boolean) => {
+    if (this.showAll === value) return
+    this.showAll = value
+    this.publish()
+    if (this.enabled) void this.refresh()
   }
 
   dispose = () => {
     if (this.timer !== undefined) clearInterval(this.timer)
-    this.unsubscribe?.()
+    this.unsubscribeSettings?.()
+    this.unsubscribeSessions?.()
   }
 }
 
@@ -349,6 +390,8 @@ export const zh = {
   // 审批轨迹面板
   trailTitle: '审批轨迹',
   trailCollapse: '收起',
+  trailScopeSession: '当前会话',
+  trailScopeAll: '查看全部',
   locate: '定位',
   summaryLabel: '操作',
   reasonLabel: '理由',
@@ -404,6 +447,8 @@ export const en = {
   // 审批轨迹面板
   trailTitle: 'Approval trail',
   trailCollapse: 'Collapse',
+  trailScopeSession: 'Current session',
+  trailScopeAll: 'All sessions',
   locate: 'Locate',
   summaryLabel: 'Action',
   reasonLabel: 'Reason',

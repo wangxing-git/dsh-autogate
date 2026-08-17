@@ -35,25 +35,51 @@ const CSS = `.sa_card{border:1px solid var(--dsw-alias-border-l2);background:var
 .sa_btnSave{border:1px solid #0000;color:var(--dsw-alias-label-primary-foreground);background:var(--dsw-alias-button-primary-fill)}
 .sa_btnSave:hover{background:var(--dsw-alias-button-primary-hover)}
 .sa_trail{position:fixed;right:16px;bottom:16px;z-index:1000;display:flex;flex-direction:column;align-items:flex-end;gap:8px;max-width:380px;pointer-events:auto}
-.sa_trailToggle{appearance:none;font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);border-radius:999px;padding:6px 14px;font-size:12px;line-height:1.5;box-shadow:0 2px 8px #0000002e}
-.sa_trailList{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:360px;overflow:auto}
-.sa_trailItem{display:flex;flex-direction:column;gap:2px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:8px;padding:6px 10px;font-size:12px;line-height:1.5}
-.sa_trailItem--deny{border-left:3px solid var(--dsw-alias-label-error)}
-.sa_trailItem--allow{border-left:3px solid #2f9e44}
-.sa_trailItem--ask{border-left:3px solid #f08c00}
-.sa_trailMeta{color:var(--dsw-alias-label-secondary);font-weight:600}
-.sa_trailSummary{color:var(--dsw-alias-label-primary);word-break:break-all}
-.sa_trailReason{color:var(--dsw-alias-label-tertiary);word-break:break-all}
+.sa_trailToggle{appearance:none;font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);border-radius:999px;padding:6px 14px;font-size:12px;line-height:1.5;box-shadow:0 2px 8px #0000002e;align-items:center;gap:6px;display:inline-flex}
+.sa_trailToggle:hover{border-color:var(--dsw-alias-label-dimmed)}
+.sa_trailToggleDot{width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-label-tertiary);flex:none}
+.sa_trailToggleDot--allow{background:var(--dsw-alias-state-success-primary)}
+.sa_trailToggleDot--deny{background:var(--dsw-alias-state-error-primary)}
+.sa_trailToggleDot--ask{background:var(--dsw-alias-state-warn-primary)}
+.sa_trailToggleStats{display:inline-flex;align-items:center;gap:6px}
+.sa_trailToggleStat{white-space:nowrap;font-size:11px;font-weight:500;line-height:1.5}
+.sa_trailToggleStat--allow{color:var(--dsw-alias-state-success-primary)}
+.sa_trailToggleStat--deny{color:var(--dsw-alias-state-error-primary)}
+.sa_trailToggleStat--ask{color:var(--dsw-alias-state-warn-primary)}
+.sa_trailPanel{display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:10px;box-shadow:0 4px 16px #00000026;overflow:hidden}
+.sa_trailTabs{display:flex;border-bottom:1px solid var(--dsw-alias-border-l2)}
+.sa_trailTab{appearance:none;font:inherit;cursor:pointer;border:0;background:0 0;color:var(--dsw-alias-label-secondary);padding:6px 12px;font-size:12px;line-height:1.5;flex:1;text-align:center}
+.sa_trailTab:hover{color:var(--dsw-alias-label-primary)}
+.sa_trailTab--active{color:var(--dsw-alias-brand-primary);font-weight:600;box-shadow:inset 0 -2px 0 var(--dsw-alias-brand-primary)}
+.sa_trailList{list-style:none;margin:0;padding:8px;display:flex;flex-direction:column;gap:8px;max-height:360px;overflow:auto}
+.sa_trailItem{display:flex;flex-direction:column;gap:2px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:10px;padding:8px 10px;font-size:12px;line-height:1.5;transition:background .12s}
+.sa_trailItem:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.sa_trailItem--deny{border-left:3px solid var(--dsw-alias-state-error-primary)}
+.sa_trailItem--allow{border-left:3px solid var(--dsw-alias-state-success-primary)}
+.sa_trailItem--ask{border-left:3px solid var(--dsw-alias-state-warn-primary)}
+.sa_trailBadge{white-space:nowrap;border-radius:999px;padding:1px 8px;font-size:11px;font-weight:600;line-height:17px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);flex:none}
+.sa_trailBadge--allow{color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 14%,transparent)}
+.sa_trailBadge--deny{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 14%,transparent)}
+.sa_trailBadge--ask{color:var(--dsw-alias-state-warn-primary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 14%,transparent)}
+.sa_trailLayer{white-space:nowrap;border-radius:999px;padding:1px 6px;font-size:10px;font-weight:600;line-height:15px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-tertiary);flex:none}
+.sa_trailTool{color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family-code,ui-monospace,SF Mono,Menlo,Consolas,monospace);font-size:12px;line-height:1.5;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sa_trailTime{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.5;flex:none;white-space:nowrap}
+.sa_trailPreview{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .sa_trailItemHead{display:flex;align-items:center;gap:6px}
 .sa_trailItemToggle{appearance:none;font:inherit;cursor:pointer;background:0 0;border:0;padding:0;flex:1;min-width:0;display:flex;align-items:center;gap:6px;color:inherit;text-align:left}
 .sa_trailChevron{color:var(--dsw-alias-label-tertiary);flex:none;transition:transform .16s}
 .sa_trailChevronOpen{transform:rotate(180deg)}
 .sa_trailLocate{appearance:none;font:inherit;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);background:0 0;color:var(--dsw-alias-label-secondary);border-radius:6px;padding:1px 8px;font-size:11px;line-height:1.5;flex:none}
 .sa_trailLocate:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}
-.sa_trailItemBody{display:flex;flex-direction:column;gap:4px;margin-top:4px;padding-top:4px;border-top:1px dashed var(--dsw-alias-border-l2)}
+.sa_trailItemBody{display:flex;flex-direction:column;gap:4px;margin-top:4px;padding-top:4px;border-top:1px dashed var(--dsw-alias-border-l2);animation:sa-fade-in .16s ease}
 .sa_trailRow{display:flex;gap:8px;min-width:0}
 .sa_trailRowLabel{color:var(--dsw-alias-label-tertiary);flex:none;font-size:11px;line-height:1.5}
+.sa_trailSummary{color:var(--dsw-alias-label-primary);word-break:break-all;font-size:12px;line-height:1.5}
+.sa_trailReason{color:var(--dsw-alias-label-secondary);word-break:break-all;font-size:12px;line-height:1.5}
 .sa_trailDetail{color:var(--dsw-alias-label-secondary);word-break:break-all;font-size:12px;line-height:1.5}
+.sa_trailCallId{font-family:var(--ds-font-family-code,ui-monospace,SF Mono,Menlo,Consolas,monospace)}
+@keyframes sa-fade-in{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.sa_trailItemBody{animation:none}}
 .sa_combo{position:relative;min-width:0}
 .sa_comboInput{width:100%;box-sizing:border-box;padding-right:26px}
 .sa_comboCaret{position:absolute;right:10px;top:50%;transform:translateY(-50%);pointer-events:none;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1}
@@ -365,7 +391,7 @@ function SafeAutoCard(props: any) {
   })
 }
 
-/** 单条审批记录：可折叠展开，展开后显示完整 summary / reason / callId / time，并支持定位到会话中的操作。 */
+/** 单条审批记录：头部用决策/层级徽章 + 工具名 + 时间分层展示，折叠态显示操作摘要预览，展开后显示完整详情并支持定位到会话中的操作。 */
 function TrailItem(props: any) {
   const [open, setOpen] = useState(false)
   const { record, onLocate, t } = props
@@ -382,7 +408,10 @@ function TrailItem(props: any) {
             'aria-expanded': open,
             onClick: () => setOpen(!open),
             children: [
-              jsx('span', { className: 'sa_trailMeta', children: record.layer + ' · ' + decisionText + ' · ' + record.toolName }),
+              jsx('span', { className: 'sa_trailBadge sa_trailBadge--' + record.decision, children: decisionText }),
+              jsx('span', { className: 'sa_trailLayer', children: record.layer }),
+              jsx('span', { className: 'sa_trailTool', title: record.toolName, children: record.toolName }),
+              jsx('span', { className: 'sa_trailTime', children: formatTime(record.time) }),
               jsx('span', { className: open ? 'sa_trailChevron sa_trailChevronOpen' : 'sa_trailChevron', children: '▾' }),
             ],
           }),
@@ -399,23 +428,27 @@ function TrailItem(props: any) {
         children: [
           record.summary ? jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: t('summaryLabel') }), jsx('span', { className: 'sa_trailSummary', children: record.summary })] }) : null,
           record.reason ? jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: t('reasonLabel') }), jsx('span', { className: 'sa_trailReason', children: record.reason })] }) : null,
-          jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: 'callId' }), jsx('span', { className: 'sa_trailDetail', children: record.callId })] }),
+          jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: 'callId' }), jsx('span', { className: 'sa_trailDetail sa_trailCallId', children: record.callId })] }),
           jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: t('timeLabel') }), jsx('span', { className: 'sa_trailDetail', children: formatTime(record.time) })] }),
           jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: t('durationLabel') }), jsx('span', { className: 'sa_trailDetail', children: formatDuration(record.durationMs) })] }),
         ],
-      }) : null,
+      }) : record.summary ? jsx('div', { className: 'sa_trailPreview', title: record.summary, children: record.summary }) : null,
     ],
   })
 }
 
 function TrailPanel(props: any) {
   const [open, setOpen] = useState(false)
-  const { t, useTrail } = props
+  const { t, useTrail, setShowAll } = props
   const snapshot = useTrail((s: any) => s) ?? {}
   // showTrail 关闭时不再渲染浮窗（TrailController 亦已停止轮询）。
   if (snapshot.enabled === false) return null
   const records = Array.isArray(snapshot.records) ? snapshot.records : []
   if (records.length === 0) return null
+  // 面板统一基于「最近 50 条」窗口（轨迹环形缓冲上限 200，面板只展示最新一段）：计数、统计与列表口径一致。
+  const window = records.slice(-50)
+  const stats = window.reduce((acc: Record<string, number>, r: any) => { acc[r.decision] = (acc[r.decision] ?? 0) + 1; return acc }, { allow: 0, deny: 0, ask: 0 })
+  const lastDecision = window[window.length - 1]?.decision
   const locate = (callId: string) => {
     const el = Array.from(document.querySelectorAll('[data-chat-call-id]')).find((node) => node.getAttribute('data-chat-call-id') === callId)
     if (el !== undefined) {
@@ -425,27 +458,60 @@ function TrailPanel(props: any) {
   return jsxs('div', {
     className: 'sa_trail',
     children: [
-      jsx('button', {
+      jsxs('button', {
         type: 'button',
         className: 'sa_trailToggle',
         onClick: () => setOpen(!open),
-        children: (open ? t('trailCollapse') : t('trailTitle')) + ' ' + records.length,
+        children: [
+          jsx('span', { className: 'sa_trailToggleDot sa_trailToggleDot--' + lastDecision, 'aria-hidden': true }),
+          (open ? t('trailCollapse') : t('trailTitle')) + ' · ' + window.length,
+          jsxs('span', {
+            className: 'sa_trailToggleStats',
+            children: [
+              jsx('span', { className: 'sa_trailToggleStat sa_trailToggleStat--allow', title: t('decisionAllow'), children: '✓' + stats.allow }),
+              jsx('span', { className: 'sa_trailToggleStat sa_trailToggleStat--deny', title: t('decisionDeny'), children: '✗' + stats.deny }),
+              jsx('span', { className: 'sa_trailToggleStat sa_trailToggleStat--ask', title: t('decisionAsk'), children: '?' + stats.ask }),
+            ],
+          }),
+        ],
       }),
-      open ? jsx('ul', {
-        className: 'sa_trailList',
-        children: records.slice(-50).reverse().map((record: any) => jsx(TrailItem, {
-          key: String(record.seq),
-          record,
-          onLocate: locate,
-          t,
-        })),
+      open ? jsxs('div', {
+        className: 'sa_trailPanel',
+        children: [
+          jsxs('div', {
+            className: 'sa_trailTabs',
+            children: [
+              jsx('button', {
+                type: 'button',
+                className: 'sa_trailTab' + (snapshot.showAll ? '' : ' sa_trailTab--active'),
+                onClick: () => setShowAll(false),
+                children: t('trailScopeSession'),
+              }),
+              jsx('button', {
+                type: 'button',
+                className: 'sa_trailTab' + (snapshot.showAll ? ' sa_trailTab--active' : ''),
+                onClick: () => setShowAll(true),
+                children: t('trailScopeAll'),
+              }),
+            ],
+          }),
+          jsx('ul', {
+            className: 'sa_trailList',
+            children: window.slice().reverse().map((record: any) => jsx(TrailItem, {
+              key: String(record.seq),
+              record,
+              onLocate: locate,
+              t,
+            })),
+          }),
+        ],
       }) : null,
     ],
   })
 }
 
 // ==== apply ====
-const inject = ['slots', 'locale', 'connection']
+const inject = ['slots', 'locale', 'connection', 'sessions']
 
 function apply(ctx: any) {
   injectCss()
@@ -466,7 +532,7 @@ function apply(ctx: any) {
     inject: () => controller.inject(),
   }, SafeAutoCard))
 
-  const trailController = new TrailController(rpc, settingsSource)
+  const trailController = new TrailController(rpc, settingsSource, ctx.sessions)
   ctx.effect(() => trailController.dispose, 'autogate: trail polling')
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',
