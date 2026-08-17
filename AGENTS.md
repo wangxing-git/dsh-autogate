@@ -2,7 +2,7 @@
 
 DeepSeek Harness 自动审批插件。在 **workspace-write 沙箱之上** 增加 Auto 权限档，采用「L0 确定性规则 + L1 LLM 安全审批 + L2 被拒绝方主动人工审批」分层决策。保留工作区沙箱边界，不放宽为 full-access。
 
-> 本文件是项目级 agent 指令。DSH 全局规则位于 `~/.dsh/AGENTS.md`，本文件只记录本项目特有约定；本机环境事实（DSH_HOME、settings.yaml 位置等）归 `AGENTS.local.md`，禁止硬编码进本文件或源码。
+> 本文件是项目级 agent 指令。DSH 全局规则位于 `~/.dsh/AGENTS.md`，本文件只记录本项目特有约定；本机环境事实（DSH_HOME、settings.yaml 位置等）归 `AGENTS.local.md`（若不存在则按需创建，无本机特殊事实时保持缺失即可），禁止硬编码进本文件或源码。
 
 ## 核心安全约束（最高优先级，不可违反）
 
