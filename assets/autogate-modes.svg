@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" font-family="PingFang SC, Heiti SC, Hiragino Sans GB, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0A111F"/>
+      <stop offset="1" stop-color="#101B30"/>
+    </linearGradient>
+    <radialGradient id="glowC" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowP" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#A78BFA" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#A78BFA" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
+      <path d="M64 0H0V64" fill="none" stroke="rgba(148,163,184,0.05)" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+  <circle cx="340" cy="80" r="300" fill="url(#glowC)"/>
+  <circle cx="1000" cy="80" r="300" fill="url(#glowP)"/>
+
+  <!-- 标题 -->
+  <text x="80" y="66" font-size="36" font-weight="bold" fill="#F1F5F9">两种模式</text>
+  <text x="82" y="98" font-size="16" fill="#94A3B8">共享同一套 L0 规则与 L1 分类器 · 唯一区别是 L2 人工兜底</text>
+
+  <!-- 左卡 auto-ask -->
+  <rect x="80" y="130" width="540" height="360" rx="16" fill="rgba(34,211,238,0.05)" stroke="rgba(34,211,238,0.4)" stroke-width="1"/>
+  <rect x="540" y="142" width="64" height="26" rx="13" fill="rgba(34,211,238,0.18)" stroke="rgba(34,211,238,0.5)"/>
+  <text x="572" y="160" font-size="13" fill="#67E8F9" text-anchor="middle">默认</text>
+  <text x="110" y="178" font-family="Menlo, Monaco, monospace" font-size="30" font-weight="bold" fill="#22D3EE">auto-ask</text>
+  <text x="270" y="178" font-size="20" fill="#F1F5F9">半自动</text>
+  <line x1="110" y1="200" x2="590" y2="200" stroke="rgba(148,163,184,0.2)" stroke-width="1"/>
+
+  <!-- 左卡 行1 L0 -->
+  <circle cx="122" cy="244" r="5" fill="#34D399"/>
+  <text x="136" y="249" font-family="Menlo, Monaco, monospace" font-size="17" font-weight="bold" fill="#34D399">L0</text>
+  <text x="168" y="249" font-size="16" fill="#E2E8F0">确定性规则</text>
+  <rect x="504" y="227" width="100" height="30" rx="15" fill="rgba(52,211,153,0.18)" stroke="rgba(52,211,153,0.5)"/>
+  <text x="554" y="247" font-family="Menlo, Monaco, monospace" font-size="12" fill="#6EE7B7" text-anchor="middle">allow · deny</text>
+
+  <!-- 左卡 行2 L1 -->
+  <circle cx="122" cy="302" r="5" fill="#22D3EE"/>
+  <text x="136" y="307" font-family="Menlo, Monaco, monospace" font-size="17" font-weight="bold" fill="#22D3EE">L1</text>
+  <text x="168" y="307" font-size="16" fill="#E2E8F0">LLM 安全审批</text>
+  <rect x="504" y="285" width="100" height="30" rx="15" fill="rgba(34,211,238,0.18)" stroke="rgba(34,211,238,0.5)"/>
+  <text x="554" y="305" font-family="Menlo, Monaco, monospace" font-size="12" fill="#67E8F9" text-anchor="middle">allow · deny</text>
+
+  <!-- 左卡 行3 L2 高亮 -->
+  <rect x="100" y="322" width="500" height="62" rx="10" fill="rgba(251,191,36,0.07)" stroke="rgba(251,191,36,0.55)" stroke-width="1" stroke-dasharray="5 3"/>
+  <circle cx="122" cy="353" r="5" fill="#FBBF24"/>
+  <text x="136" y="358" font-family="Menlo, Monaco, monospace" font-size="17" font-weight="bold" fill="#FBBF24">L2</text>
+  <text x="168" y="358" font-size="16" fill="#E2E8F0">人工兜底</text>
+  <rect x="504" y="338" width="100" height="30" rx="15" fill="rgba(251,191,36,0.18)" stroke="rgba(251,191,36,0.5)"/>
+  <text x="554" y="358" font-family="Menlo, Monaco, monospace" font-size="12" fill="#FCD34D" text-anchor="middle">人工弹窗</text>
+
+  <text x="110" y="436" font-size="15" fill="#94A3B8">LLM 拒绝 / 异常 → 委派人工弹窗兜底</text>
+  <text x="110" y="462" font-size="14" fill="#64748B">适合日常开发 · 安全与效率平衡</text>
+
+  <!-- 中间分隔符号 -->
+  <text x="640" y="320" font-size="30" fill="#334155" text-anchor="middle" font-family="Menlo, Monaco, monospace">=</text>
+
+  <!-- 右卡 auto -->
+  <rect x="660" y="130" width="540" height="360" rx="16" fill="rgba(167,139,250,0.05)" stroke="rgba(167,139,250,0.4)" stroke-width="1"/>
+  <rect x="1114" y="142" width="70" height="26" rx="13" fill="rgba(167,139,250,0.18)" stroke="rgba(167,139,250,0.5)"/>
+  <text x="1149" y="160" font-size="13" fill="#C4B5FD" text-anchor="middle">仅可信环境</text>
+  <text x="690" y="178" font-family="Menlo, Monaco, monospace" font-size="30" font-weight="bold" fill="#A78BFA">auto</text>
+  <text x="810" y="178" font-size="20" fill="#F1F5F9">全自动</text>
+  <line x1="690" y1="200" x2="1170" y2="200" stroke="rgba(148,163,184,0.2)" stroke-width="1"/>
+
+  <!-- 右卡 行1 L0 -->
+  <circle cx="702" cy="244" r="5" fill="#34D399"/>
+  <text x="716" y="249" font-family="Menlo, Monaco, monospace" font-size="17" font-weight="bold" fill="#34D399">L0</text>
+  <text x="748" y="249" font-size="16" fill="#E2E8F0">确定性规则</text>
+  <rect x="1084" y="227" width="100" height="30" rx="15" fill="rgba(52,211,153,0.18)" stroke="rgba(52,211,153,0.5)"/>
+  <text x="1134" y="247" font-family="Menlo, Monaco, monospace" font-size="12" fill="#6EE7B7" text-anchor="middle">allow · deny</text>
+
+  <!-- 右卡 行2 L1 -->
+  <circle cx="702" cy="302" r="5" fill="#22D3EE"/>
+  <text x="716" y="307" font-family="Menlo, Monaco, monospace" font-size="17" font-weight="bold" fill="#22D3EE">L1</text>
+  <text x="748" y="307" font-size="16" fill="#E2E8F0">LLM 安全审批</text>
+  <rect x="1084" y="285" width="100" height="30" rx="15" fill="rgba(34,211,238,0.18)" stroke="rgba(34,211,238,0.5)"/>
+  <text x="1134" y="305" font-family="Menlo, Monaco, monospace" font-size="12" fill="#67E8F9" text-anchor="middle">allow · deny</text>
+
+  <!-- 右卡 行3 L2 高亮 -->
+  <rect x="680" y="322" width="500" height="62" rx="10" fill="rgba(167,139,250,0.09)" stroke="rgba(167,139,250,0.55)" stroke-width="1" stroke-dasharray="5 3"/>
+  <circle cx="702" cy="353" r="5" fill="#A78BFA"/>
+  <text x="716" y="358" font-family="Menlo, Monaco, monospace" font-size="17" font-weight="bold" fill="#A78BFA">L2</text>
+  <text x="748" y="358" font-size="16" fill="#E2E8F0">人工兜底（移除）</text>
+  <rect x="1084" y="338" width="100" height="30" rx="15" fill="rgba(167,139,250,0.18)" stroke="rgba(167,139,250,0.5)"/>
+  <text x="1134" y="358" font-family="Menlo, Monaco, monospace" font-size="12" fill="#C4B5FD" text-anchor="middle">LLM 终裁</text>
+
+  <text x="690" y="436" font-size="15" fill="#94A3B8">LLM 拒绝 / 异常 → 直接拒绝，不再人工弹窗</text>
+  <text x="690" y="462" font-size="14" fill="#64748B">LLM 裁决为最终决定 · 仅可信环境使用</text>
+
+  <!-- 底部说明 -->
+  <text x="80" y="560" font-size="15" fill="#64748B">两模式共享同一套 L0 规则与 L1 分类器 · 硬 deny（L0 guard）与 preflight 开关行为一致</text>
+</svg>

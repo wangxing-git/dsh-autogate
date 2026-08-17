@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" font-family="PingFang SC, Heiti SC, Hiragino Sans GB, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0A111F"/>
+      <stop offset="1" stop-color="#101B30"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.09"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
+      <path d="M64 0H0V64" fill="none" stroke="rgba(148,163,184,0.05)" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+  <circle cx="640" cy="20" r="360" fill="url(#glow)"/>
+
+  <!-- 标题 -->
+  <text x="80" y="66" font-size="36" font-weight="bold" fill="#F1F5F9">核心特性</text>
+  <text x="82" y="98" font-size="16" fill="#94A3B8">不只是减少审批 · 更是可控的安全边界</text>
+
+  <!-- 卡1 减少人工审批 -->
+  <rect x="80" y="150" width="540" height="210" rx="16" fill="rgba(52,211,153,0.05)" stroke="rgba(52,211,153,0.3)" stroke-width="1"/>
+  <path d="M140,176 L122,200 L135,200 L128,214 L150,190 L137,190 Z" fill="#34D399"/>
+  <text x="170" y="205" font-size="22" font-weight="bold" fill="#F1F5F9">减少人工审批</text>
+  <text x="110" y="258" font-size="15" fill="#CBD5E1">常规只读 / 工作区内编辑 / build·test 直接放行</text>
+  <text x="110" y="284" font-size="15" fill="#CBD5E1">仅模糊或危险操作才交 LLM 或人工裁决</text>
+  <text x="110" y="326" font-size="13" fill="#64748B">把时间还给开发，而不是反复点「允许」</text>
+
+  <!-- 卡2 fail-closed -->
+  <rect x="660" y="150" width="540" height="210" rx="16" fill="rgba(248,113,113,0.05)" stroke="rgba(248,113,113,0.3)" stroke-width="1"/>
+  <g transform="translate(560,0)">
+    <path d="M140,178 L154,178 L154,192 C154,202 146,208 140,212 C134,208 126,202 126,192 L126,178 Z" fill="none" stroke="#F87171" stroke-width="2"/>
+  </g>
+  <line x1="693" y1="185" x2="707" y2="199" stroke="#F87171" stroke-width="2"/>
+  <line x1="707" y1="185" x2="693" y2="199" stroke="#F87171" stroke-width="2"/>
+  <text x="740" y="205" font-size="22" font-weight="bold" fill="#F1F5F9">fail-closed 安全</text>
+  <text x="690" y="258" font-size="15" fill="#CBD5E1">分类器异常 / 超时 / 无路由 / 格式错误一律拒绝</text>
+  <text x="690" y="284" font-size="15" fill="#CBD5E1">绝不降级放行，宁可错杀不可放过</text>
+  <text x="690" y="326" font-size="13" fill="#64748B">误判只会多问一次，不会多放一个危险操作</text>
+
+  <!-- 卡3 沙箱不放宽 -->
+  <rect x="80" y="400" width="540" height="210" rx="16" fill="rgba(34,211,238,0.05)" stroke="rgba(34,211,238,0.3)" stroke-width="1"/>
+  <path d="M134,420 L134,414 A6,6 0 0 1 146,414 L146,420" fill="none" stroke="#22D3EE" stroke-width="2"/>
+  <rect x="128" y="420" width="24" height="20" rx="4" fill="none" stroke="#22D3EE" stroke-width="2"/>
+  <circle cx="140" cy="429" r="2" fill="#22D3EE"/>
+  <text x="170" y="455" font-size="22" font-weight="bold" fill="#F1F5F9">沙箱不放宽</text>
+  <text x="110" y="508" font-size="15" fill="#CBD5E1">L0 / L1 决策从不放宽沙箱边界</text>
+  <text x="110" y="534" font-size="15" fill="#CBD5E1">普通写入仍限制在工作区，绝不退化 full-access</text>
+  <text x="110" y="576" font-size="13" fill="#64748B">安全边界始终由 DSH 沙箱兜底</text>
+
+  <!-- 卡4 审批轨迹 UI -->
+  <rect x="660" y="400" width="540" height="210" rx="16" fill="rgba(251,191,36,0.05)" stroke="rgba(251,191,36,0.3)" stroke-width="1"/>
+  <rect x="690" y="432" width="32" height="7" rx="3.5" fill="#34D399"/>
+  <rect x="690" y="444" width="32" height="7" rx="3.5" fill="#F87171"/>
+  <rect x="690" y="456" width="32" height="7" rx="3.5" fill="#FBBF24"/>
+  <text x="740" y="455" font-size="22" font-weight="bold" fill="#F1F5F9">审批轨迹 UI</text>
+  <text x="690" y="506" font-size="15" fill="#CBD5E1">右下角浮窗 · 最近 50 条 · 彩色徽章 · 每一次决策可回溯</text>
+  <!-- 迷你轨迹面板 -->
+  <rect x="690" y="524" width="460" height="68" rx="12" fill="rgba(15,23,42,0.9)" stroke="rgba(148,163,184,0.25)" stroke-width="1"/>
+  <circle cx="706" cy="542" r="5" fill="#34D399"/>
+  <text x="720" y="546" font-family="Menlo, Monaco, monospace" font-size="13" fill="#6EE7B7">allow</text>
+  <text x="788" y="546" font-family="Menlo, Monaco, monospace" font-size="12" fill="#94A3B8">read  ·  L0</text>
+  <circle cx="706" cy="560" r="5" fill="#F87171"/>
+  <text x="720" y="564" font-family="Menlo, Monaco, monospace" font-size="13" fill="#FCA5A5">deny</text>
+  <text x="788" y="564" font-family="Menlo, Monaco, monospace" font-size="12" fill="#94A3B8">network  ·  L1</text>
+  <circle cx="706" cy="578" r="5" fill="#FBBF24"/>
+  <text x="720" y="582" font-family="Menlo, Monaco, monospace" font-size="13" fill="#FCD34D">ask</text>
+  <text x="788" y="582" font-family="Menlo, Monaco, monospace" font-size="12" fill="#94A3B8">git  ·  L2</text>
+</svg>

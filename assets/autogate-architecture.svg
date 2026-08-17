@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" font-family="PingFang SC, Heiti SC, Hiragino Sans GB, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0A111F"/>
+      <stop offset="1" stop-color="#101B30"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
+      <path d="M64 0H0V64" fill="none" stroke="rgba(148,163,184,0.05)" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+  <circle cx="1200" cy="40" r="340" fill="url(#glow)"/>
+
+  <!-- 标题 -->
+  <text x="80" y="66" font-size="36" font-weight="bold" fill="#F1F5F9">分层决策架构</text>
+  <text x="82" y="98" font-size="16" fill="#94A3B8">每一层各司其职 · 未命中下沉 · fail-closed 默认拒绝 · 沙箱始终兜底</text>
+
+  <!-- 层间箭头 -->
+  <g stroke="#475569" stroke-width="2" fill="none">
+    <line x1="640" y1="244" x2="640" y2="266"/>
+    <path d="M633 262 L640 272 L647 262"/>
+    <line x1="640" y1="386" x2="640" y2="408"/>
+    <path d="M633 404 L640 414 L647 404"/>
+  </g>
+  <text x="656" y="262" font-size="13" fill="#64748B">未命中 · 下沉</text>
+  <text x="656" y="404" font-size="13" fill="#64748B">未命中 · 下沉</text>
+
+  <!-- L0 层 -->
+  <rect x="80" y="130" width="1120" height="112" rx="14" fill="rgba(52,211,153,0.07)" stroke="rgba(52,211,153,0.35)" stroke-width="1"/>
+  <rect x="80" y="130" width="6" height="112" rx="3" fill="#34D399"/>
+  <text x="112" y="176" font-family="Menlo, Monaco, monospace" font-size="28" font-weight="bold" fill="#34D399">L0</text>
+  <text x="154" y="176" font-size="22" font-weight="bold" fill="#F1F5F9">确定性规则</text>
+  <text x="112" y="202" font-size="16" fill="#CBD5E1">零成本 · 零 LLM：常规只读、会话状态、工作区内编辑与删除直接放行</text>
+  <text x="112" y="226" font-size="16" fill="#CBD5E1">同步硬拒绝：提权 / 自毁 / 凭据外传 / 文件系统根与关键路径变更</text>
+  <rect x="1084" y="167" width="100" height="38" rx="19" fill="rgba(52,211,153,0.18)" stroke="rgba(52,211,153,0.5)"/>
+  <text x="1134" y="191" font-family="Menlo, Monaco, monospace" font-size="13" fill="#6EE7B7" text-anchor="middle">allow · deny</text>
+
+  <!-- L1 层 -->
+  <rect x="80" y="272" width="1120" height="112" rx="14" fill="rgba(34,211,238,0.07)" stroke="rgba(34,211,238,0.35)" stroke-width="1"/>
+  <rect x="80" y="272" width="6" height="112" rx="3" fill="#22D3EE"/>
+  <text x="112" y="318" font-family="Menlo, Monaco, monospace" font-size="28" font-weight="bold" fill="#22D3EE">L1</text>
+  <text x="154" y="318" font-size="22" font-weight="bold" fill="#F1F5F9">LLM 安全审批</text>
+  <text x="112" y="344" font-size="16" fill="#CBD5E1">模糊 shell、敏感路径读、git 状态变更、网络 / 数据库等语义危险操作</text>
+  <text x="112" y="368" font-size="16" fill="#CBD5E1">输入先脱敏 + 标签隔离 + 注入防御，两态裁决 allow / deny</text>
+  <rect x="1084" y="309" width="100" height="38" rx="19" fill="rgba(34,211,238,0.18)" stroke="rgba(34,211,238,0.5)"/>
+  <text x="1134" y="333" font-family="Menlo, Monaco, monospace" font-size="13" fill="#67E8F9" text-anchor="middle">allow · deny</text>
+
+  <!-- L2 层 -->
+  <rect x="80" y="414" width="1120" height="112" rx="14" fill="rgba(251,191,36,0.07)" stroke="rgba(251,191,36,0.35)" stroke-width="1"/>
+  <rect x="80" y="414" width="6" height="112" rx="3" fill="#FBBF24"/>
+  <text x="112" y="460" font-family="Menlo, Monaco, monospace" font-size="28" font-weight="bold" fill="#FBBF24">L2</text>
+  <text x="154" y="460" font-size="22" font-weight="bold" fill="#F1F5F9">人工兜底</text>
+  <text x="112" y="486" font-size="16" fill="#CBD5E1">通道一 · ask_user_question：问用户确认操作合法，确认后重跑再过 LLM</text>
+  <text x="112" y="510" font-size="16" fill="#CBD5E1">通道二 · sandbox_permissions + justification：走沙箱提权（escalation）</text>
+  <rect x="1084" y="451" width="100" height="38" rx="19" fill="rgba(251,191,36,0.18)" stroke="rgba(251,191,36,0.5)"/>
+  <text x="1134" y="475" font-family="Menlo, Monaco, monospace" font-size="13" fill="#FCD34D" text-anchor="middle">ask</text>
+
+  <!-- 沙箱底座 -->
+  <rect x="80" y="546" width="1120" height="66" rx="12" fill="rgba(148,163,184,0.05)" stroke="rgba(34,211,238,0.5)" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <circle cx="112" cy="579" r="6" fill="#22D3EE"/>
+  <text x="132" y="585" font-size="19" fill="#E2E8F0"><tspan font-family="Menlo, Monaco, monospace" fill="#67E8F9">workspace-write</tspan> 沙箱 · 真实执行边界</text>
+  <text x="680" y="585" font-size="14" fill="#94A3B8">L0 / L1 / L2 决策从不放宽沙箱 · 普通写入仍限制在工作区</text>
+</svg>

@@ -2,6 +2,10 @@
 
 # dsh-autogate
 
+<p align="center">
+  <img src="assets/autogate-banner.png" alt="dsh-autogate — 在 workspace-write 沙箱之上的分层自动审批插件" width="100%">
+</p>
+
 DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增加「半自动（auto-ask）+ 全自动（auto）」两档权限，采用「确定性规则 + LLM 安全审批 +（半自动下）被拒绝方主动人工审批」分层决策。保留工作区沙箱边界，不放宽为 full-access。
 
 ## 分层设计
@@ -12,6 +16,10 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 | L1 LLM 安全审批 | allow / deny | 沙箱不拦截但语义危险的操作（未识别工具、模糊 shell、敏感路径读、动态目标、块设备、持久终端、git 状态变更、网络/数据库操作、工作区内受保护路径写）交 LLM 两态裁决：用户明确授权的操作放行，减少人工批准。分类器输入先脱敏再标签隔离（`<untrusted>` 数据 vs `<user-authority>` 授权），并内置注入防御；用户用短指代（如「A」）回应 AI 方案列表时，AI 提议作为 `<proposal-context>` 仅用于消解指代、不作授权；agent 指令文件（AGENTS.md / CLAUDE.md / .dsh 等）按常规配置归类，用户明确授权即可编辑 |
 | L2 人工审批 | ask | 两条通道：① AI 用 ask_user_question 问用户确认操作合法，确认后重新执行再过 LLM；② AI 用 sandbox_permissions + justification 重试走 DSH 沙箱提权（escalation），本插件先过 LLM 判断——合理越界直接批准不弹窗，危险/不确定才人工弹窗 |
 
+<p align="center">
+  <img src="assets/autogate-architecture.png" alt="分层决策架构：L0 确定性规则 → L1 LLM 安全审批 → L2 人工兜底，workspace-write 沙箱始终兜底" width="100%">
+</p>
+
 ## 两种模式
 
 | 预设键 | 模式 | escalation 提权审批兜底 |
@@ -21,11 +29,19 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 
 两种模式共享同一套 L0 确定性规则与 L1 LLM 分类器，唯一区别是 **L2 人工兜底**：半自动保留人工弹窗，全自动把 LLM 裁决作为最终决定。硬 deny（L0 guard）与 `preflight` 开关在两种模式下行为一致。
 
+<p align="center">
+  <img src="assets/autogate-modes.png" alt="两种模式对比：auto-ask 半自动（默认）与 auto 全自动，唯一区别是 L2 人工兜底" width="100%">
+</p>
+
 ## 与同类插件的关键区别
 
 - **普通调用保持 workspace-write**：L0/L1 决策从不放宽沙箱，即使 L1 LLM 误判，普通文件写入仍被限制在工作区（不同于让每次调用都跑 danger-full-access 的同类插件）。**L2 escalation 通道是例外**：批准的提权会让那一次调用以请求的更宽沙箱运行——见安全免责声明。
 - **未识别工具默认走 LLM 分类而非放行**：但 `run_code` 作为代码执行容器直接放行——它内部的每次工具调用仍各自经过本策略与沙箱评估。
 - **fail-closed**：分类器异常 / 超时 / 无路由 / 格式错误一律拒绝，由被拒绝方（AI）视情况主动向用户发起人工审批。
+
+<p align="center">
+  <img src="assets/autogate-features.png" alt="核心特性：减少人工审批 / fail-closed 安全 / 沙箱不放宽 / 审批轨迹 UI" width="100%">
+</p>
 
 ## ⚠️ 安全免责声明
 

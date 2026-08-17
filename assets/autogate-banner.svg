@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" font-family="PingFang SC, Heiti SC, Hiragino Sans GB, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0A111F"/>
+      <stop offset="0.55" stop-color="#0D1728"/>
+      <stop offset="1" stop-color="#101B30"/>
+    </linearGradient>
+    <linearGradient id="titleGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#38BDF8"/>
+    </linearGradient>
+    <radialGradient id="glowCyan" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowPurple" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#A78BFA" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#A78BFA" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
+      <path d="M64 0H0V64" fill="none" stroke="rgba(148,163,184,0.055)" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <!-- 背景 -->
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+  <circle cx="1060" cy="40" r="380" fill="url(#glowCyan)"/>
+  <circle cx="40" cy="620" r="340" fill="url(#glowPurple)"/>
+
+  <!-- 顶部徽章 -->
+  <rect x="80" y="66" width="344" height="36" rx="18" fill="rgba(34,211,238,0.12)" stroke="rgba(34,211,238,0.45)" stroke-width="1"/>
+  <circle cx="104" cy="84" r="5" fill="#22D3EE"/>
+  <text x="120" y="90" font-size="18" fill="#67E8F9">DeepSeek Harness 自动审批插件</text>
+
+  <!-- 主标题 -->
+  <text x="78" y="206" font-family="Menlo, Monaco, monospace" font-size="72" font-weight="bold">
+    <tspan fill="#F8FAFC">dsh-</tspan><tspan fill="url(#titleGrad)">autogate</tspan>
+  </text>
+  <rect x="82" y="222" width="220" height="6" rx="3" fill="url(#titleGrad)"/>
+
+  <!-- 副标题 -->
+  <text x="82" y="292" font-size="26" fill="#E2E8F0">
+    <tspan>在 </tspan><tspan font-family="Menlo, Monaco, monospace" fill="#67E8F9">workspace-write</tspan><tspan> 沙箱之上 · 分层自动审批</tspan>
+  </text>
+  <text x="82" y="330" font-size="19" fill="#94A3B8">减少人工审批 · 不放宽沙箱边界 · fail-closed 默认拒绝</text>
+
+  <!-- 三个核心徽章 -->
+  <!-- L0 -->
+  <rect x="80" y="372" width="252" height="64" rx="12" fill="rgba(52,211,153,0.08)" stroke="rgba(52,211,153,0.35)" stroke-width="1"/>
+  <circle cx="112" cy="404" r="5" fill="#34D399"/>
+  <text x="128" y="398" font-family="Menlo, Monaco, monospace" font-size="22" font-weight="bold" fill="#34D399">L0</text>
+  <text x="168" y="398" font-size="20" fill="#F1F5F9">确定性规则</text>
+  <text x="128" y="424" font-family="Menlo, Monaco, monospace" font-size="12" fill="#94A3B8">deterministic rules</text>
+  <!-- L1 -->
+  <rect x="356" y="372" width="266" height="64" rx="12" fill="rgba(34,211,238,0.08)" stroke="rgba(34,211,238,0.35)" stroke-width="1"/>
+  <circle cx="388" cy="404" r="5" fill="#22D3EE"/>
+  <text x="404" y="398" font-family="Menlo, Monaco, monospace" font-size="22" font-weight="bold" fill="#22D3EE">L1</text>
+  <text x="444" y="398" font-size="20" fill="#F1F5F9">LLM 安全审批</text>
+  <text x="404" y="424" font-family="Menlo, Monaco, monospace" font-size="12" fill="#94A3B8">LLM safety review</text>
+  <!-- L2 -->
+  <rect x="646" y="372" width="246" height="64" rx="12" fill="rgba(251,191,36,0.08)" stroke="rgba(251,191,36,0.35)" stroke-width="1"/>
+  <circle cx="678" cy="404" r="5" fill="#FBBF24"/>
+  <text x="694" y="398" font-family="Menlo, Monaco, monospace" font-size="22" font-weight="bold" fill="#FBBF24">L2</text>
+  <text x="734" y="398" font-size="20" fill="#F1F5F9">人工兜底</text>
+  <text x="694" y="424" font-family="Menlo, Monaco, monospace" font-size="12" fill="#94A3B8">human fallback</text>
+
+  <!-- 底部信息行 -->
+  <text x="82" y="574" font-size="15" fill="#64748B">
+    <tspan font-family="Menlo, Monaco, monospace">MIT License</tspan>
+    <tspan>  ·  </tspan>
+    <tspan font-family="Menlo, Monaco, monospace">auto-ask</tspan><tspan> 半自动 / </tspan><tspan font-family="Menlo, Monaco, monospace">auto</tspan><tspan> 全自动</tspan>
+    <tspan>  ·  审批轨迹实时可见</tspan>
+  </text>
+
+  <!-- 右侧决策漏斗 -->
+  <g>
+    <!-- 层间箭头 -->
+    <g stroke="#475569" stroke-width="2" fill="none">
+      <line x1="1065" y1="230" x2="1065" y2="246"/>
+      <path d="M1058 242 L1065 252 L1072 242"/>
+      <line x1="1065" y1="330" x2="1065" y2="346"/>
+      <path d="M1058 342 L1065 352 L1072 342"/>
+      <line x1="1065" y1="430" x2="1065" y2="446"/>
+      <path d="M1058 442 L1065 452 L1072 442"/>
+    </g>
+
+    <!-- L0 层 -->
+    <rect x="890" y="150" width="350" height="72" rx="14" fill="rgba(52,211,153,0.09)" stroke="rgba(52,211,153,0.4)" stroke-width="1"/>
+    <circle cx="916" cy="186" r="5" fill="#34D399"/>
+    <text x="934" y="180" font-family="Menlo, Monaco, monospace" font-size="20" font-weight="bold" fill="#34D399">L0</text>
+    <text x="972" y="180" font-size="18" fill="#F1F5F9">确定性规则</text>
+    <text x="934" y="206" font-size="13" fill="#94A3B8">零成本 · 零 LLM · 硬拒绝提权/自毁</text>
+    <rect x="1124" y="170" width="100" height="30" rx="15" fill="rgba(52,211,153,0.18)" stroke="rgba(52,211,153,0.5)"/>
+    <text x="1174" y="190" font-family="Menlo, Monaco, monospace" font-size="12" fill="#6EE7B7" text-anchor="middle">allow/deny</text>
+
+    <!-- L1 层 -->
+    <rect x="890" y="250" width="350" height="72" rx="14" fill="rgba(34,211,238,0.09)" stroke="rgba(34,211,238,0.4)" stroke-width="1"/>
+    <circle cx="916" cy="286" r="5" fill="#22D3EE"/>
+    <text x="934" y="280" font-family="Menlo, Monaco, monospace" font-size="20" font-weight="bold" fill="#22D3EE">L1</text>
+    <text x="972" y="280" font-size="18" fill="#F1F5F9">LLM 安全审批</text>
+    <text x="934" y="306" font-size="13" fill="#94A3B8">模糊/语义危险操作 · 脱敏 + 注入防御</text>
+    <rect x="1124" y="270" width="100" height="30" rx="15" fill="rgba(34,211,238,0.18)" stroke="rgba(34,211,238,0.5)"/>
+    <text x="1174" y="290" font-family="Menlo, Monaco, monospace" font-size="12" fill="#67E8F9" text-anchor="middle">allow/deny</text>
+
+    <!-- L2 层 -->
+    <rect x="890" y="350" width="350" height="72" rx="14" fill="rgba(251,191,36,0.09)" stroke="rgba(251,191,36,0.4)" stroke-width="1"/>
+    <circle cx="916" cy="386" r="5" fill="#FBBF24"/>
+    <text x="934" y="380" font-family="Menlo, Monaco, monospace" font-size="20" font-weight="bold" fill="#FBBF24">L2</text>
+    <text x="972" y="380" font-size="18" fill="#F1F5F9">人工兜底</text>
+    <text x="934" y="406" font-size="13" fill="#94A3B8">被拒绝方主动发起 · 用户确认 / 提权审批</text>
+    <rect x="1124" y="370" width="100" height="30" rx="15" fill="rgba(251,191,36,0.18)" stroke="rgba(251,191,36,0.5)"/>
+    <text x="1174" y="390" font-family="Menlo, Monaco, monospace" font-size="12" fill="#FCD34D" text-anchor="middle">ask</text>
+
+    <!-- 沙箱底座 -->
+    <rect x="890" y="450" width="350" height="90" rx="14" fill="rgba(148,163,184,0.05)" stroke="rgba(34,211,238,0.55)" stroke-width="1.5" stroke-dasharray="6 4"/>
+    <text x="1065" y="486" font-size="20" fill="#67E8F9" text-anchor="middle" font-weight="bold">workspace-write 沙箱</text>
+    <text x="1065" y="516" font-size="14" fill="#94A3B8" text-anchor="middle">始终兜底 · 永不放宽为 full-access</text>
+  </g>
+</svg>
