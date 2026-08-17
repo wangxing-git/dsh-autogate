@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
-import type { ClassifierDecision, ClassifierInput, SafetyClassifier } from './types.js'
+import type { GenerateOptions, Message, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
+import type { ClassifierDecision, ClassifierInput, ClassifierTokenUsage, SafetyClassifier } from './types.js'
 import type { UiLocale } from './i18n.js'
 
 /** 分类器系统提示词：按操作的具体目标/类型/可逆性/实际影响做语义判断，越界本身不是拒绝理由；低风险越界放行，真正危险才拒绝。 */
@@ -187,7 +187,8 @@ export function createDshClassifier(runtime: LlmStreamRuntime, config: DshClassi
         })
         // 仅对模型输出解析失败重试一次（temperature 0 下偶发格式抖动）。
         try {
-          return parseClassifierDecision(JSON.parse(jsonText(response)))
+          const decision = parseClassifierDecision(JSON.parse(jsonText(response.text)))
+          return response.usage === undefined ? decision : { ...decision, usage: response.usage }
         } catch (error) {
           lastParseError = error
         }
@@ -197,9 +198,19 @@ export function createDshClassifier(runtime: LlmStreamRuntime, config: DshClassi
   }
 }
 
-async function collectResponse(runtime: LlmStreamRuntime, options: GenerateOptions): Promise<string> {
+/** 把 DSH 的 TokenUsage 归一化为分类器 token 消耗（缓存输入 / 未缓存输入 / 输出）。 */
+function fromTokenUsage(usage: TokenUsage): ClassifierTokenUsage {
+  return {
+    cachedInputTokens: usage.cacheReadTokens ?? 0,
+    uncachedInputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+  }
+}
+
+async function collectResponse(runtime: LlmStreamRuntime, options: GenerateOptions): Promise<{ text: string; usage?: ClassifierTokenUsage }> {
   const parts = new Map<number, string>()
   let finish: Extract<StreamChunk, { type: 'finish' }>['reason'] | undefined
+  let usage: TokenUsage | undefined
   let size = 0
   for await (const chunk of runtime.stream(options)) {
     if (chunk.type === 'text-delta') {
@@ -213,6 +224,8 @@ async function collectResponse(runtime: LlmStreamRuntime, options: GenerateOptio
       }
     } else if (chunk.type === 'tool-call-delta') {
       throw new Error('classifier unexpectedly requested a tool')
+    } else if (chunk.type === 'usage') {
+      usage = chunk.usage
     } else if (chunk.type === 'finish') {
       finish = chunk.reason
     }
@@ -222,7 +235,10 @@ async function collectResponse(runtime: LlmStreamRuntime, options: GenerateOptio
   if (finish.kind === 'error' || finish.kind === 'aborted') throw new Error(finish.failure.message)
   if (finish.kind === 'max-tokens') throw new Error('classifier response reached its output limit')
   if (finish.kind === 'tool-calls') throw new Error('classifier unexpectedly requested a tool')
-  return [...parts.entries()].sort(([left], [right]) => left - right).map(([, text]) => text).join('')
+  return {
+    text: [...parts.entries()].sort(([left], [right]) => left - right).map(([, text]) => text).join(''),
+    ...(usage === undefined ? {} : { usage: fromTokenUsage(usage) }),
+  }
 }
 
 /** 独立 OpenAI 兼容分类器（可选；必须 HTTPS 或 loopback HTTP）。 */
@@ -249,6 +265,28 @@ function responseContent(value: unknown): string {
   const content = message.content
   if (typeof content !== 'string' || content.length > 10000) throw new Error('classifier content is invalid')
   return content
+}
+
+/** 从 OpenAI 兼容响应的 usage 字段解析 token 消耗；缺失或结构不符时返回 undefined。 */
+function parseHttpUsage(body: unknown): ClassifierTokenUsage | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const usage = (body as Record<string, unknown>).usage
+  if (typeof usage !== 'object' || usage === null) return undefined
+  const record = usage as Record<string, unknown>
+  const promptTokens = record.prompt_tokens
+  const outputTokens = record.completion_tokens
+  if (typeof promptTokens !== 'number' || typeof outputTokens !== 'number') return undefined
+  const details = record.prompt_tokens_details
+  let cached = 0
+  if (typeof details === 'object' && details !== null) {
+    const cachedTokens = (details as Record<string, unknown>).cached_tokens
+    if (typeof cachedTokens === 'number' && cachedTokens > 0) cached = cachedTokens
+  }
+  return {
+    cachedInputTokens: cached,
+    uncachedInputTokens: Math.max(0, promptTokens - cached),
+    outputTokens,
+  }
 }
 
 export function createHttpClassifier(config: HttpClassifierConfig): SafetyClassifier {
@@ -283,7 +321,9 @@ export function createHttpClassifier(config: HttpClassifierConfig): SafetyClassi
         const body: unknown = JSON.parse(text)
         // 仅对模型输出解析失败重试一次。
         try {
-          return parseClassifierDecision(JSON.parse(responseContent(body)))
+          const decision = parseClassifierDecision(JSON.parse(responseContent(body)))
+          const usage = parseHttpUsage(body)
+          return usage === undefined ? decision : { ...decision, usage }
         } catch (error) {
           lastParseError = error
         }

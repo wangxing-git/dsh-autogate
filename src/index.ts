@@ -7,7 +7,7 @@ import { CLASSIFIER_SYSTEM_PROMPT, createDshClassifier, createHttpClassifier, ex
 import { resolveRoots, type RootOptions } from './paths.js'
 import { assessTool, hardDenyReason, hasSandboxEscalation, isSandboxEscalationRetry, summarizeToolArguments } from './policy.js'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
-import type { ManagedMode, SafetyClassifier } from './types.js'
+import type { ClassifierInput, ClassifierTokenUsage, ManagedMode, SafetyClassifier } from './types.js'
 import { installSettingsSection, settingsNamespace, type SettingsProvider } from '@deepseek-ai/dsh-settings'
 import { createApprovalTrail, type ApprovalDecision, type ApprovalLayer } from './trail.js'
 import type { UiLocale } from './i18n.js'
@@ -588,9 +588,36 @@ export function apply(ctx: Context, config: Config = {}): void {
     return id === undefined ? '' : String(id)
   }
 
-  /** 审批轨迹记录：authority 由调用方解析后传入（避免每条记录重复沿 parentSession 链查找），sessionId 取授权会话保证按当前会话隔离查询。 */
-  const recordTrail = (exec: Readonly<ToolExecution>, authority: ReturnType<typeof authorityFor>, decision: ApprovalDecision, layer: ApprovalLayer, reason: string, durationMs: number): void => {
+  /** 底层轨迹写入：L1/L2 统一入口。classifierInput / tokenUsage 缺省时省略字段（「无」不写成 undefined）。 */
+  const recordTrailEntry = (entry: {
+    callId: string
+    toolName: string
+    summary: string
+    decision: ApprovalDecision
+    layer: ApprovalLayer
+    reason: string
+    durationMs: number
+    sessionId: string
+    classifierInput?: ClassifierInput
+    tokenUsage?: ClassifierTokenUsage
+  }): void => {
     trail.record({
+      callId: entry.callId,
+      toolName: entry.toolName,
+      summary: entry.summary,
+      decision: entry.decision,
+      layer: entry.layer,
+      reason: entry.reason,
+      durationMs: entry.durationMs,
+      sessionId: entry.sessionId,
+      ...(entry.classifierInput === undefined ? {} : { classifierInput: entry.classifierInput }),
+      ...(entry.tokenUsage === undefined ? {} : { tokenUsage: entry.tokenUsage }),
+    })
+  }
+
+  /** 审批轨迹记录：authority 由调用方解析后传入（避免每条记录重复沿 parentSession 链查找），sessionId 取授权会话保证按当前会话隔离查询。 */
+  const recordTrail = (exec: Readonly<ToolExecution>, authority: ReturnType<typeof authorityFor>, decision: ApprovalDecision, layer: ApprovalLayer, reason: string, durationMs: number, classifierInput?: ClassifierInput, tokenUsage?: ClassifierTokenUsage): void => {
+    recordTrailEntry({
       callId: exec.callId === undefined ? '' : String(exec.callId),
       toolName: exec.name,
       summary: summarizeToolArguments(exec.name, exec.arguments),
@@ -599,6 +626,8 @@ export function apply(ctx: Context, config: Config = {}): void {
       reason,
       durationMs,
       sessionId: sessionIdOf(authority?.agent ?? exec.agent),
+      classifierInput,
+      tokenUsage,
     })
   }
 
@@ -660,7 +689,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         maxChars: proposalContextMaxChars,
         maxTotalChars: proposalContextMaxTotalChars,
       })
-      const decision = await classifier.classify({
+      const classifierInput: ClassifierInput = {
         toolName: exec.name,
         arguments: sanitizeClassifierArguments(exec.arguments),
         workspaceRoot: roots.workspace,
@@ -668,12 +697,13 @@ export function apply(ctx: Context, config: Config = {}): void {
         trustedUserMessages: trustedMessages,
         proposalContexts,
         ...(route === undefined ? {} : { route }),
-      }, exec.signal)
+      }
+      const decision = await classifier.classify(classifierInput, exec.signal)
       if (decision.decision === 'allow') {
-        recordTrail(exec, authority, 'allow', 'L1', decision.reason, Date.now() - startedAt)
+        recordTrail(exec, authority, 'allow', 'L1', decision.reason, Date.now() - startedAt, classifierInput, decision.usage)
         return next()
       }
-      recordTrail(exec, authority, 'deny', 'L1', decision.reason, Date.now() - startedAt)
+      recordTrail(exec, authority, 'deny', 'L1', decision.reason, Date.now() - startedAt, classifierInput, decision.usage)
       return { kind: 'deny', reason: '[autogate classifier deny] ' + decision.reason }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
@@ -706,7 +736,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         maxChars: proposalContextMaxChars,
         maxTotalChars: proposalContextMaxTotalChars,
       })
-      const decision = await classifier.classify({
+      const classifierInput: ClassifierInput = {
         toolName: req.toolName,
         arguments: sanitizeClassifierArguments(rawArguments),
         workspaceRoot: roots.workspace,
@@ -714,17 +744,18 @@ export function apply(ctx: Context, config: Config = {}): void {
         trustedUserMessages: trustedMessages,
         proposalContexts,
         ...(route === undefined ? {} : { route }),
-      }, req.signal ?? new AbortController().signal)
+      }
+      const decision = await classifier.classify(classifierInput, req.signal ?? new AbortController().signal)
       if (decision.decision === 'allow') {
-        trail.record({ callId, toolName: req.toolName, summary, decision: 'allow', layer: 'L2', reason: decision.reason, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent) })
+        recordTrailEntry({ callId, toolName: req.toolName, summary, decision: 'allow', layer: 'L2', reason: decision.reason, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent), classifierInput, tokenUsage: decision.usage })
         return 'allowed-once'
       }
-      trail.record({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: decision.reason, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent) })
+      recordTrailEntry({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: decision.reason, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent), classifierInput, tokenUsage: decision.usage })
     } catch (error: unknown) {
       // 分类器异常：半自动 fail-closed 到人工弹窗；全自动直接拒绝。保留具体错误并写日志，便于上报排查。
       const message = error instanceof Error ? error.message : String(error)
       ctx.logger.warn('autogate: L2 提权预审分类器异常（工具: ' + req.toolName + '）', error)
-      trail.record({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: 'classifier unavailable: ' + message, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent) })
+      recordTrailEntry({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: 'classifier unavailable: ' + message, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent) })
     }
     // 全自动：LLM 裁决为最终决定，直接拒绝不再人工弹窗；半自动：委派人工兜底。
     if (mode === 'full-auto') return 'rejected'

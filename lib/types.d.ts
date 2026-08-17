@@ -20,10 +20,21 @@ export interface ClassifierInput {
         model: string;
     };
 }
+/** 一次审查 LLM 调用的 token 消耗。 */
+export interface ClassifierTokenUsage {
+    /** 缓存输入 token（cache read hit）。 */
+    cachedInputTokens: number;
+    /** 未缓存输入 token（uncached input）。 */
+    uncachedInputTokens: number;
+    /** 输出 token。 */
+    outputTokens: number;
+}
 /** LLM 分类器输出（严格两态：放行或拒绝；拒绝后由被拒绝方主动向用户发起人工审批）。 */
 export interface ClassifierDecision {
     decision: 'allow' | 'deny';
     reason: string;
+    /** 该次 LLM 调用的 token 消耗；未能取得（异常 / 无 usage 信息）时缺省。 */
+    usage?: ClassifierTokenUsage;
 }
 /** 安全分类器接口：默认走 DSH 内部 LLM，可替换为独立 HTTP 端点。 */
 export interface SafetyClassifier {

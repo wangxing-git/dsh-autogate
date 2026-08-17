@@ -51,4 +51,22 @@ describe('createApprovalTrail', () => {
     expect(snapshot[0].sessionId).toBe('sess-1')
     expect(snapshot[1].sessionId).toBe('')
   })
+
+  it('记录携带发送给审查 LLM 的输入（classifierInput）；缺省时无该字段', () => {
+    const trail = createApprovalTrail()
+    trail.record({ callId: 'a', toolName: 'bash', summary: 'ls', decision: 'deny', layer: 'L1', reason: '危险', durationMs: 1, classifierInput: { toolName: 'bash', arguments: { command: 'rm -rf /tmp/x' }, workspaceRoot: '/ws', policyReason: '敏感路径', trustedUserMessages: ['<user-authority>允许清理</user-authority>'] } })
+    trail.record({ callId: 'b', toolName: 'read', summary: '/ws/a.ts', decision: 'allow', layer: 'L0', reason: '只读', durationMs: 0 })
+    const snapshot = trail.snapshot()
+    expect(snapshot[0].classifierInput).toEqual({ toolName: 'bash', arguments: { command: 'rm -rf /tmp/x' }, workspaceRoot: '/ws', policyReason: '敏感路径', trustedUserMessages: ['<user-authority>允许清理</user-authority>'] })
+    expect(snapshot[1].classifierInput).toBeUndefined()
+  })
+
+  it('记录携带审查 LLM 的 token 消耗（tokenUsage）；缺省时无该字段', () => {
+    const trail = createApprovalTrail()
+    trail.record({ callId: 'a', toolName: 'bash', summary: 'ls', decision: 'deny', layer: 'L1', reason: '危险', durationMs: 1, tokenUsage: { cachedInputTokens: 80, uncachedInputTokens: 120, outputTokens: 30 } })
+    trail.record({ callId: 'b', toolName: 'read', summary: '/ws/a.ts', decision: 'allow', layer: 'L0', reason: '只读', durationMs: 0 })
+    const snapshot = trail.snapshot()
+    expect(snapshot[0].tokenUsage).toEqual({ cachedInputTokens: 80, uncachedInputTokens: 120, outputTokens: 30 })
+    expect(snapshot[1].tokenUsage).toBeUndefined()
+  })
 })

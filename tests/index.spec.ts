@@ -310,6 +310,39 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
     expect(records[0]).toMatchObject({ callId: 'call-2', toolName: 'read', decision: 'allow', layer: 'L0' })
   })
 
+  it('L1 LLM 审查的轨迹携带发送给审查 LLM 的输入（classifierInput）与 token 消耗', async () => {
+    const chunks = [
+      { type: 'text-delta', index: 0, text: '{"decision":"allow","reason":"ok"}' },
+      { type: 'usage', usage: { inputTokens: 120, outputTokens: 30, cacheReadTokens: 80 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ]
+    const { ctx, listeners, rpcHandlers } = createMockContext(chunks)
+    apply(ctx as any, { preflight: true })
+    const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
+    const agent = {
+      session: {
+        events: [
+          { type: 'permission/preset', data: { preset: 'auto-ask' } },
+          { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '允许清理 /tmp' }] } },
+        ],
+        header: { cwd: '/ws', id: 'sess-l1' },
+      },
+      options: { provider: 'deepseek', model: 'deepseek-chat' },
+    }
+    // unrecognized_tool 无法静态分类，走 L1 LLM 审查。
+    await preExecute({ name: 'unrecognized_tool', arguments: { probe: true }, callId: 'call-l1', agent, signal: new AbortController().signal }, async () => ({ kind: 'allow' }))
+
+    const handler = rpcHandlers.get('/autogate')!
+    const result = await handler('trail', undefined, undefined as any)
+    const records = (result as any).value
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ callId: 'call-l1', toolName: 'unrecognized_tool', decision: 'allow', layer: 'L1' })
+    expect(records[0].classifierInput).toBeDefined()
+    expect(records[0].classifierInput.toolName).toBe('unrecognized_tool')
+    expect(records[0].classifierInput.trustedUserMessages).toEqual(['允许清理 /tmp'])
+    expect(records[0].tokenUsage).toEqual({ cachedInputTokens: 80, uncachedInputTokens: 120, outputTokens: 30 })
+  })
+
   it('trail 按 sessionId 过滤：只返回当前会话的记录', async () => {
     const { ctx, listeners, rpcHandlers } = createMockContext(allowChunks)
     apply(ctx as any, { preflight: true })

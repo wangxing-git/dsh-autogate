@@ -319,3 +319,51 @@ describe('createHttpClassifier HTTP 端点', () => {
     expect(decision).toEqual({ decision: 'deny', reason: 'danger' })
   })
 })
+
+describe('分类器 token 消耗追踪', () => {
+  const input = { toolName: 'x', arguments: {}, workspaceRoot: '/ws', policyReason: 't', trustedUserMessages: [], route: { provider: 'p', model: 'm' } }
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('DSH 内部分类器从 usage chunk 收集缓存/未缓存输入与输出', async () => {
+    const runtime = {
+      stream: async function* () {
+        yield { type: 'text-delta', index: 0, text: '{"decision":"allow","reason":"ok"}' }
+        yield { type: 'usage', usage: { inputTokens: 120, outputTokens: 30, cacheReadTokens: 80 } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    }
+    const classifier = createDshClassifier(runtime as any, { timeoutMs: 1000 })
+    const decision = await classifier.classify(input as any, new AbortController().signal)
+    expect(decision).toEqual({ decision: 'allow', reason: 'ok', usage: { cachedInputTokens: 80, uncachedInputTokens: 120, outputTokens: 30 } })
+  })
+
+  it('DSH 内部分类器无 usage chunk 时不带 usage 字段', async () => {
+    const runtime = {
+      stream: async function* () {
+        yield { type: 'text-delta', index: 0, text: '{"decision":"allow","reason":"ok"}' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    }
+    const classifier = createDshClassifier(runtime as any, { timeoutMs: 1000 })
+    const decision = await classifier.classify(input as any, new AbortController().signal)
+    expect(decision).toEqual({ decision: 'allow', reason: 'ok' })
+  })
+
+  it('HTTP 分类器解析 OpenAI 兼容 usage（含 cached_tokens）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: '{"decision":"allow","reason":"ok"}' } }],
+      usage: { prompt_tokens: 200, completion_tokens: 50, prompt_tokens_details: { cached_tokens: 140 } },
+    }), { status: 200 })))
+    const classifier = createHttpClassifier({ endpoint: 'https://api.example.com/v1/chat/completions', model: 'm', timeoutMs: 1000 })
+    const decision = await classifier.classify(input as any, new AbortController().signal)
+    expect(decision).toEqual({ decision: 'allow', reason: 'ok', usage: { cachedInputTokens: 140, uncachedInputTokens: 60, outputTokens: 50 } })
+  })
+
+  it('HTTP 分类器无 usage 字段时不带 usage', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"decision":"allow","reason":"ok"}' } }] }), { status: 200 })))
+    const classifier = createHttpClassifier({ endpoint: 'https://api.example.com/v1/chat/completions', model: 'm', timeoutMs: 1000 })
+    const decision = await classifier.classify(input as any, new AbortController().signal)
+    expect(decision).toEqual({ decision: 'allow', reason: 'ok' })
+  })
+})

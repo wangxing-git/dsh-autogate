@@ -1,3 +1,4 @@
+import type { ClassifierInput, ClassifierTokenUsage } from './types.js';
 /** 审批决策值：allow 放行 / deny 拒绝 / ask 转人工。 */
 export type ApprovalDecision = 'allow' | 'deny' | 'ask';
 /** 决策层级：L0 确定性规则 / L1 LLM 安全审批 / L2 人工审批。 */
@@ -22,6 +23,10 @@ export interface ApprovalRecord {
     reason: string;
     /** 产生该决策的会话 id（顶层授权会话；子代理调用归属其父会话），无会话上下文时为空字符串。 */
     sessionId: string;
+    /** 发送给审查 LLM 的输入（已脱敏、不含系统提示词）；仅 L1/L2 记录携带，L0 无。 */
+    classifierInput?: ClassifierInput;
+    /** 审查 LLM 调用的 token 消耗（缓存输入 / 未缓存输入 / 输出）；仅 L1/L2 且能取得 usage 时携带。 */
+    tokenUsage?: ClassifierTokenUsage;
 }
 /** 审批轨迹：进程级环形缓冲，只增不持久化（重启即清空）。 */
 export interface ApprovalTrail {

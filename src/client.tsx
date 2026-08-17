@@ -78,6 +78,7 @@ const CSS = `.sa_card{border:1px solid var(--dsw-alias-border-l2);background:var
 .sa_trailReason{color:var(--dsw-alias-label-secondary);word-break:break-all;font-size:12px;line-height:1.5}
 .sa_trailDetail{color:var(--dsw-alias-label-secondary);word-break:break-all;font-size:12px;line-height:1.5}
 .sa_trailCallId{font-family:var(--ds-font-family-code,ui-monospace,SF Mono,Menlo,Consolas,monospace)}
+.sa_trailLlmInput{font-family:var(--ds-font-family-code,ui-monospace,SF Mono,Menlo,Consolas,monospace);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;max-height:240px;overflow:auto;color:var(--dsw-alias-label-secondary)}
 @keyframes sa-fade-in{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}
 @media(prefers-reduced-motion:reduce){.sa_trailItemBody{animation:none}}
 .sa_combo{position:relative;min-width:0}
@@ -431,6 +432,8 @@ function TrailItem(props: any) {
           jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: 'callId' }), jsx('span', { className: 'sa_trailDetail sa_trailCallId', children: record.callId })] }),
           jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: t('timeLabel') }), jsx('span', { className: 'sa_trailDetail', children: formatTime(record.time) })] }),
           jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: t('durationLabel') }), jsx('span', { className: 'sa_trailDetail', children: formatDuration(record.durationMs) })] }),
+          record.tokenUsage ? jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: t('tokenUsageLabel') }), jsx('span', { className: 'sa_trailDetail', children: `${t('tokenCachedInput')} ${record.tokenUsage.cachedInputTokens} · ${t('tokenUncachedInput')} ${record.tokenUsage.uncachedInputTokens} · ${t('tokenOutput')} ${record.tokenUsage.outputTokens}` })] }) : null,
+          record.classifierInput ? jsxs('div', { className: 'sa_trailRow', children: [jsx('span', { className: 'sa_trailRowLabel', children: t('classifierInputLabel') }), jsx('pre', { className: 'sa_trailDetail sa_trailLlmInput', children: JSON.stringify(record.classifierInput, null, 2) })] }) : null,
         ],
       }) : record.summary ? jsx('div', { className: 'sa_trailPreview', title: record.summary, children: record.summary }) : null,
     ],
