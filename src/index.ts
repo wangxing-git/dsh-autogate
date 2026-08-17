@@ -677,6 +677,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       return { kind: 'deny', reason: '[autogate classifier deny] ' + decision.reason }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
+      ctx.logger.warn('autogate: L1 分类器异常，拒绝操作（工具: ' + exec.name + '）', error)
       recordTrail(exec, authority, 'deny', 'L1', message, Date.now() - startedAt)
       return { kind: 'deny', reason: '[autogate classifier unavailable] ' + message }
     }
@@ -719,9 +720,11 @@ export function apply(ctx: Context, config: Config = {}): void {
         return 'allowed-once'
       }
       trail.record({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: decision.reason, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent) })
-    } catch {
-      // 分类器异常：半自动 fail-closed 到人工弹窗；全自动直接拒绝。
-      trail.record({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: 'classifier unavailable', durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent) })
+    } catch (error: unknown) {
+      // 分类器异常：半自动 fail-closed 到人工弹窗；全自动直接拒绝。保留具体错误并写日志，便于上报排查。
+      const message = error instanceof Error ? error.message : String(error)
+      ctx.logger.warn('autogate: L2 提权预审分类器异常（工具: ' + req.toolName + '）', error)
+      trail.record({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: 'classifier unavailable: ' + message, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent) })
     }
     // 全自动：LLM 裁决为最终决定，直接拒绝不再人工弹窗；半自动：委派人工兜底。
     if (mode === 'full-auto') return 'rejected'

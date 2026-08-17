@@ -9,6 +9,7 @@ type ApprovalListener = (req: any, next: () => Promise<ApprovalOutcome>) => Prom
 function createMockContext(chunks: any[] | null, agentsMap?: Map<string, unknown>) {
   const listeners = new Map<string, ApprovalListener[]>()
   const capturedCalls: any[] = []
+  const logCalls: any[] = []
   const guards: ((exec: any) => string | undefined)[] = []
   const stream = chunks === null
     ? async function* (options: any) { capturedCalls.push(options); throw new Error('llm down') }
@@ -32,6 +33,12 @@ function createMockContext(chunks: any[] | null, agentsMap?: Map<string, unknown
       register() { return () => {} },
     },
     llm: { stream },
+    logger: {
+      warn(...args: any[]) { logCalls.push(['warn', ...args]) },
+      error(...args: any[]) { logCalls.push(['error', ...args]) },
+      info() {},
+      debug() {},
+    },
     // 模拟 cordis ctx.inject：仅对已 mock 提供的 connection 服务就绪时调用 callback；
     // settings 等未 mock 服务视为永不就绪，保持 no-op（installSettingsSection 回退 entry config）。
     inject(names: string[], callback: (injectedCtx: any, config?: any) => any) {
@@ -46,7 +53,7 @@ function createMockContext(chunks: any[] | null, agentsMap?: Map<string, unknown
     },
     effect() { return () => {} },
   }
-  return { ctx, listeners, rpcHandlers, capturedCalls, guards }
+  return { ctx, listeners, rpcHandlers, capturedCalls, guards, logCalls }
 }
 
 /** Auto 会话的 mock agent（含 provider/model 路由与工作区 cwd）。 */
@@ -120,16 +127,21 @@ describe('apply 注册的 escalation answerer（approval/request）', () => {
     expect(await answerer(escalationReq(agentWithPreset('read-only')), next)).toBe('rejected')
   })
 
-  it('LLM 异常 → 委派人工（fail-closed）', async () => {
-    const { ctx, listeners } = createMockContext(null)
+  it('LLM 异常 → 委派人工（fail-closed），并写日志', async () => {
+    const { ctx, listeners, logCalls } = createMockContext(null)
     apply(ctx as any)
     const answerer = listeners.get('approval/request')![0]
     const next = async (): Promise<ApprovalOutcome> => 'allowed-once'
     expect(await answerer(escalationReq(), next)).toBe('allowed-once')
+    // 分类器异常写日志：级别 warn，消息含「分类器异常」，附具体 Error
+    const warn = logCalls.find(([level]) => level === 'warn')
+    expect(warn).toBeDefined()
+    expect(String(warn[1])).toContain('分类器异常')
+    expect(warn[2]).toBeInstanceOf(Error)
   })
 
-  it('无模型路由导致分类失败 → 委派人工（fail-closed）', async () => {
-    const { ctx, listeners } = createMockContext(allowChunks)
+  it('无模型路由导致分类失败 → 委派人工（fail-closed），并写日志', async () => {
+    const { ctx, listeners, logCalls } = createMockContext(allowChunks)
     apply(ctx as any)
     const answerer = listeners.get('approval/request')![0]
     const noRouteAgent = {
@@ -140,6 +152,9 @@ describe('apply 注册的 escalation answerer（approval/request）', () => {
     }
     const next = async (): Promise<ApprovalOutcome> => 'rejected'
     expect(await answerer(escalationReq(noRouteAgent), next)).toBe('rejected')
+    const warn = logCalls.find(([level]) => level === 'warn')
+    expect(warn).toBeDefined()
+    expect(String(warn[1])).toContain('分类器异常')
   })
 
   it('write 提权 → 分类器收到原始 file_path（而非仅 justification）', async () => {
@@ -623,13 +638,17 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 })
 
 describe('preflight 开启时 LLM 异常 fail-closed', () => {
-  it('LLM 抛错 → deny（[autogate classifier unavailable]）', async () => {
-    const { ctx, listeners } = createMockContext(null)
+  it('LLM 抛错 → deny（[autogate classifier unavailable]），并写日志', async () => {
+    const { ctx, listeners, logCalls } = createMockContext(null)
     apply(ctx as any, { preflight: true })
     const preExecute = listeners.get('tools/pre-execute')![0] as any
     const exec = { name: 'unrecognized_tool', arguments: { probe: true }, callId: 'call-llm-down', agent: autoAgent(), signal: new AbortController().signal }
     const decision = await preExecute(exec, async () => ({ kind: 'allow' }))
     expect(decision).toEqual({ kind: 'deny', reason: expect.stringContaining('[autogate classifier unavailable]') })
+    const warn = logCalls.find(([level]) => level === 'warn')
+    expect(warn).toBeDefined()
+    expect(String(warn[1])).toContain('分类器异常')
+    expect(warn[2]).toBeInstanceOf(Error)
   })
 })
 
@@ -655,12 +674,16 @@ describe('全自动模式（auto）：escalation 审批不人工兜底', () => {
     expect(nextCalled).toBe(false)
   })
 
-  it('LLM 异常 → rejected（fail-closed，不人工兜底）', async () => {
-    const { ctx, listeners } = createMockContext(null)
+  it('LLM 异常 → rejected（fail-closed，不人工兜底），并写日志', async () => {
+    const { ctx, listeners, logCalls } = createMockContext(null)
     apply(ctx as any)
     const answerer = listeners.get('approval/request')![0]
     const next = async (): Promise<ApprovalOutcome> => 'allowed-once'
     expect(await answerer(fullEscReq(), next)).toBe('rejected')
+    const warn = logCalls.find(([level]) => level === 'warn')
+    expect(warn).toBeDefined()
+    expect(String(warn[1])).toContain('分类器异常')
+    expect(warn[2]).toBeInstanceOf(Error)
   })
 
   it('全自动模式拒绝记录到轨迹（decision=deny, layer=L2）', async () => {
