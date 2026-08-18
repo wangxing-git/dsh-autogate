@@ -27,13 +27,7 @@ function privilegeReason(mode: ManagedMode | undefined, locale: UiLocale | undef
 
 // ---- 硬 deny 正则（guard 与 pre-execute 共用，确定性零成本） ----
 
-/** 提权。 */
-const PRIVILEGE_ESCALATION = /(?:^|[\s;&|])(?:sudo|doas|su)(?:\s|$)/i
-
-/** 自毁 / 系统级破坏命令。 */
-const SELF_DESTRUCTIVE = /(?:^|[\s;&|])(?:killall|pkill|taskkill|Stop-Process|shutdown|reboot|halt|poweroff|mkfs|format-volume|clear-disk)(?:\s|$)/i
-
-/** 提权命令名（tokenize 后识别，覆盖 s'u'do 等引号拼接绕过）。 */
+/** 提权命令名（命令分段 + tokenize 识别首命令，覆盖 s'u'do 等引号拼接绕过，且不把参数/文本里的 sudo 误判为提权）。 */
 const PRIVILEGE_ESCALATION_COMMANDS = new Set(['sudo', 'doas', 'su'])
 
 /** 自毁 / 系统级破坏命令名（tokenize 后识别，覆盖引号拼接绕过）。 */
@@ -48,8 +42,8 @@ const NETWORK_COMMAND = /(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod)/i
 /** 确定性硬 deny：不依赖解析器，直接正则熔断。 */
 export function hardDenyShellReason(source: string, _shell: ShellKind, _roots: PolicyRoots, locale?: UiLocale, mode?: ManagedMode): string | undefined {
   const compact = source.trim()
-  if (PRIVILEGE_ESCALATION.test(compact)) return privilegeReason(mode, locale)
-  if (SELF_DESTRUCTIVE.test(compact)) return reasonText(locale, '不允许自毁或系统级命令', 'self-destructive or system-level command is not permitted') + noEscalationHint(locale)
+  if (containsCommand(compact, PRIVILEGE_ESCALATION_COMMANDS)) return privilegeReason(mode, locale)
+  if (containsCommand(compact, SELF_DESTRUCTIVE_COMMANDS)) return reasonText(locale, '不允许自毁或系统级命令', 'self-destructive or system-level command is not permitted') + noEscalationHint(locale)
   if (NETWORK_COMMAND.test(compact) && SENSITIVE_MARKER.test(compact)) return reasonText(locale, '不允许凭据或私密数据外传', 'credential or private-data exfiltration pattern is not permitted') + noEscalationHint(locale)
   if (/rm\s+(?:-[a-z]*[fr][a-z]*\s+)*\/(?:\s|$)/.test(compact)) return reasonText(locale, '不允许删除文件系统根', 'deleting the filesystem root is not permitted') + noEscalationHint(locale)
   if (/(?:rm|Remove-Item)\s+(?:-[a-z]*[fr][a-z]*\s+)*(?:~|\$HOME|\$env:HOME)(?:\s|$)/i.test(compact)) return reasonText(locale, '不允许删除用户家目录', 'deleting the user home root is not permitted') + noEscalationHint(locale)
@@ -78,6 +72,44 @@ function tokenize(line: string): string[] {
 
 function commandName(token: string): string {
   return basename(token.replaceAll('\\', '/')).toLowerCase()
+}
+
+// ---- 命令分段（按 shell 控制符在引号外切段，识别「命令位置」的首命令） ----
+
+/**
+ * 按 shell 命令分隔符（; | & 换行 子 shell 括号，均在引号外）把复合命令切成段。
+ * 每段的首个 token 即该段命令名；据此识别提权/自毁命令，避免把 echo/grep 等
+ * 命令参数或提示文本里的 sudo/killall 误判为「命令位置」的提权/自毁。
+ */
+function commandSegments(source: string): string[] {
+  const segments: string[] = []
+  let current = ''
+  let quote: string | undefined
+  let escaped = false
+  for (const ch of source) {
+    if (escaped) { current += ch; escaped = false; continue }
+    if (ch === '\\') { escaped = true; current += ch; continue }
+    if (quote !== undefined) { current += ch; if (ch === quote) quote = undefined; continue }
+    if (ch === '"' || ch === "'") { quote = ch; current += ch; continue }
+    if (ch === ';' || ch === '|' || ch === '&' || ch === '\n' || ch === '\r' || ch === '(' || ch === ')') {
+      if (current.trim() !== '') segments.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  if (current.trim() !== '') segments.push(current)
+  return segments
+}
+
+/** 任一命令段的首命令名是否命中给定集合（区分「命令位置」与「参数/文本里的同名串」）。 */
+function containsCommand(source: string, commands: ReadonlySet<string>): boolean {
+  for (const segment of commandSegments(source)) {
+    const tokens = tokenize(segment)
+    const name = commandName(tokens[0] ?? '')
+    if (name !== '' && commands.has(name)) return true
+  }
+  return false
 }
 
 // ---- 只读命令白名单（确定只读，零副作用） ----
@@ -187,7 +219,7 @@ export function assessShell(source: string, shell: ShellKind, roots: PolicyRoots
   if (/[\$\x60]/.test(rawName)) return allow(reasonText(locale, '命令名由动态展开产生；workspace-write 沙箱适用', 'command name is produced by a dynamic expansion; workspace-write sandbox applies'))
   const name = commandName(rawName)
 
-  // 提权/自毁命令：即使原始正则被引号拼接（如 s'u'do）绕过，tokenize 后仍能确定性拒绝。
+  // 提权/自毁命令：硬 deny 分段识别之外再按首命令兜底（s'u'do 等引号拼接仍确定性拒绝）。
   if (PRIVILEGE_ESCALATION_COMMANDS.has(name)) return deny(privilegeReason(mode, locale))
   if (SELF_DESTRUCTIVE_COMMANDS.has(name)) return deny(reasonText(locale, '不允许自毁或系统级命令', 'self-destructive or system-level command is not permitted') + noEscalationHint(locale))
 

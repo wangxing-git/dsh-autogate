@@ -45,6 +45,16 @@ describe('hardDenyShellReason', () => {
     expect(assessShell("s'u'do ls", 'bash', roots, 'zh', 'semi-auto').reason).toBe('半自动模式不允许提权')
     expect(assessShell("s'u'do ls", 'bash', roots, 'zh', 'full-auto').reason).toBe('全自动模式不允许提权')
   })
+  it('echo/grep 文本里的 sudo 不是提权命令（不误判）', () => {
+    expect(hardDenyShellReason("echo '中 sudo npm 痕迹'", 'bash', roots)).toBeUndefined()
+    expect(hardDenyShellReason('grep sudo ~/.zsh_history', 'bash', roots)).toBeUndefined()
+    expect(hardDenyShellReason('printf "use sudo or doas"', 'bash', roots)).toBeUndefined()
+  })
+  it('复合命令里命令位置的 sudo 仍拒绝', () => {
+    expect(hardDenyShellReason('ls; sudo rm -rf /ws', 'bash', roots)).toContain('privilege escalation')
+    expect(hardDenyShellReason('cat x | sudo tee /etc/y', 'bash', roots)).toContain('privilege escalation')
+    expect(hardDenyShellReason('cd /ws && sudo rm old.js', 'bash', roots)).toContain('privilege escalation')
+  })
 })
 
 describe('assessShell', () => {
@@ -234,5 +244,9 @@ describe('assessShell glob 与编码绕过加固', () => {
   })
   it("k'i'llall node 引号拼接自毁 → 拒绝", () => {
     expect(assessShell("k'i'llall node", 'bash', roots).decision).toBe('deny')
+  })
+  it('echo 文本含 sudo/killall 不再误判为 deny', () => {
+    expect(assessShell("echo '用 sudo 运行'", 'bash', roots).decision).toBe('allow')
+    expect(assessShell("echo 'killall node 已删除'", 'bash', roots).decision).toBe('allow')
   })
 })
