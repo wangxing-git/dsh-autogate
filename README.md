@@ -67,7 +67,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 
 配置经 DSH settings 服务（`ctx.settings`）接入：在 `$DSH_HOME/settings.yaml` 写 `autogate:` 段即时热重载；未挂载 settings 服务时回退 `cordis.patch.yml` 的 entry config（`config: {}`）。
 
-> **关于设置 UI**：DSH 0.1.0-rc.6 的 Web 设置页对第三方插件 namespace 有硬编码 allowlist（`dsh-host-apiproxy` 的 `WEB_SETTINGS_NAMESPACES`），但它只约束 `settingsScope` 通道，不影响 slot 导航（`settings.plugin.item`）；`autogate` 不在列表中，卡片无法经 `settingsScope` 读写。因此设置卡改走插件自有的 `/autogate` RPC 端点（`settings.get` / `settings.write`），无需改官方包即可显示卡片。写入仍落在 `$DSH_HOME/settings.yaml` 的 `autogate:` 段并热重载，与下方手动配置完全一致。
+> **关于设置 UI**：DSH 0.1.0-rc.7 已移除 rc.6 对第三方插件 namespace 的硬编码 allowlist（`WEB_SETTINGS_NAMESPACES`），并支持插件经 keyed slot（`settings.plugin.item`，`key` 即 namespace）自行注册设置卡片。本插件沿用自有 `/autogate` RPC 端点（`settings.get` / `settings.write`）读写设置——该实现自 rc.6 保留至今、无需改官方包即可显示卡片，写入落在 `$DSH_HOME/settings.yaml` 的 `autogate:` 段并热重载，与下方手动配置完全一致。
 
     autogate:
       preflight: false                 # 沙盒前拦截判断开关：true 执行确定性规则+LLM 分类，false（默认）完全依赖沙盒

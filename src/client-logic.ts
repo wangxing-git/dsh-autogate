@@ -177,7 +177,7 @@ export class CardForm {
   publish() { for (const l of this.listeners) l() }
 }
 
-// ==== 设置卡数据源：自有 RPC（/autogate settings.*），绕过 settingsScope 的 namespace 白名单 ====
+// ==== 设置卡数据源：自有 RPC（/autogate settings.*），沿用 rc.6 绕过 settingsScope namespace 白名单的实现（rc.7 已移除白名单，此处保留自有 RPC 读写） ====
 export class RpcSettingsSource {
   store: any
   rpc: any

@@ -51,7 +51,7 @@ This plugin is a **decision layer that reduces manual approvals — not a securi
 
 Configuration is wired through the DSH settings service (`ctx.settings`): write an `autogate:` section in `$DSH_HOME/settings.yaml` and it hot-reloads immediately; when the settings service is not mounted, it falls back to the entry config in `cordis.patch.yml` (`config: {}`).
 
-> **About the settings UI**: DSH 0.1.0-rc.6's Web settings page hard-codes an allowlist (`WEB_SETTINGS_NAMESPACES` in `dsh-host-apiproxy`) that gates the `settingsScope` channel only — slot navigation (`settings.plugin.item`) is not filtered by it, but `autogate` is not on the list, so the card cannot read through `settingsScope`. The card therefore talks to the plugin's own `/autogate` RPC endpoints (`settings.get` / `settings.write`) instead, keeping the card visible without patching the official package. Writes land in `$DSH_HOME/settings.yaml` under `autogate:` and hot-reload, exactly as the manual section below.
+> **About the settings UI**: DSH 0.1.0-rc.7 drops the rc.6 hard-coded allowlist (`WEB_SETTINGS_NAMESPACES`) for third-party namespaces and lets plugins register their own settings cards through the keyed slot (`settings.plugin.item`, keyed by namespace). This plugin keeps its own `/autogate` RPC endpoints (`settings.get` / `settings.write`) for settings I/O — carried over from rc.6 and working without patching the official package. Writes land in `$DSH_HOME/settings.yaml` under `autogate:` and hot-reload, exactly as the manual section below.
 
     autogate:
       preflight: false                 # pre-sandbox interception switch: true runs deterministic rules + LLM classification, false (default) relies entirely on the sandbox
