@@ -5,8 +5,10 @@ import type { UiLocale } from './i18n.js';
 export declare const CLASSIFIER_SYSTEM_PROMPT: string;
 /** 按 UI 语言在系统提示词末尾追加 reason 语言指令；zh 时强制中文，其余保持默认（英文提示词自然输出英文）。 */
 export declare function withLocaleDirective(systemPrompt: string, locale: UiLocale | undefined): string;
-/** 脱敏并限界单段文本（不超过 1000 字符）。 */
+/** 脱敏并限界单段文本（保留头部，不超过 1000 字符）。 */
 export declare function sanitizeClassifierText(value: string): string;
+/** 脱敏并限界单段文本，保留末尾（不超过 maxChars 字符）。用于 AI 提议上下文：问询授权通常在末尾，截断时保持尾部完整。 */
+export declare function sanitizeClassifierTextTail(value: string, maxChars: number): string;
 /** 分类器网络边界前的脱敏：剥离大块内容与疑似密钥，限制深度与数量。 */
 export declare function sanitizeClassifierArguments(value: unknown, depth?: number): unknown;
 /** 解析分类器输出：必须有合法的 decision + reason；忽略模型偶尔多吐的额外字段，减少 fail-closed 误拒。 */

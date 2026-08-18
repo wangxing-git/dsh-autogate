@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CLASSIFIER_SYSTEM_PROMPT, createDshClassifier, createHttpClassifier, extractEscalationJustification, isEscalationApprovalReason, parseClassifierDecision, sanitizeClassifierArguments, sanitizeClassifierText, withLocaleDirective } from '../src/classifier.js'
+import { CLASSIFIER_SYSTEM_PROMPT, createDshClassifier, createHttpClassifier, extractEscalationJustification, isEscalationApprovalReason, parseClassifierDecision, sanitizeClassifierArguments, sanitizeClassifierText, sanitizeClassifierTextTail, withLocaleDirective } from '../src/classifier.js'
 
 describe('withLocaleDirective', () => {
   it('zh 追加中文 reason 指令', () => {
@@ -249,6 +249,21 @@ describe('sanitizeClassifierText 密钥脱敏', () => {
   })
   it('截断到 1000 字符', () => {
     expect(sanitizeClassifierText('a'.repeat(2000))).toHaveLength(1000)
+  })
+})
+
+describe('sanitizeClassifierTextTail 保留尾部脱敏', () => {
+  it('超长时保留末尾 maxChars 字符（丢弃头部）', () => {
+    expect(sanitizeClassifierTextTail('X'.repeat(500) + 'TAIL', 10)).toBe('XXXXXXTAIL')
+  })
+  it('不超过上限时原样返回（仅脱敏）', () => {
+    expect(sanitizeClassifierTextTail('token: ghp_abcdefghijklmnopqrst', 100)).toContain('[redacted-secret]')
+    expect(sanitizeClassifierTextTail('短文本', 100)).toBe('短文本')
+  })
+  it('密钥位于末尾时仍被脱敏', () => {
+    const out = sanitizeClassifierTextTail('A'.repeat(500) + 'api_key=supersecretvalue', 40)
+    expect(out).toContain('api_key=[redacted-secret]')
+    expect(out).not.toContain('supersecretvalue')
   })
 })
 

@@ -527,10 +527,11 @@ function apply(ctx: any) {
   // TrailController 经订阅即时启停轮询，无需重新拉取。
   const settingsSource = new RpcSettingsSource(rpc)
   const controller = new SafeAutoCardController(settingsSource, llmApi)
+  // 新版 DSH 中 settings.plugin.item 是 keyed slot：key 即卡片所编辑的 settings
+  // namespace（autogate），设置页按 namespace 分发渲染；keyed slot 不再接受 id/order。
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
-    id: 'autogate',
-    order: 50,
+    key: SETTINGS_NS,
     locale: SETTINGS_NS,
     inject: () => controller.inject(),
   }, SafeAutoCard))

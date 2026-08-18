@@ -3,7 +3,7 @@ import z from '@deepseek-ai/schemastery'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import { effectivePermissionPreset } from '@deepseek-ai/dsh-permission-presets'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
-import { CLASSIFIER_SYSTEM_PROMPT, createDshClassifier, createHttpClassifier, extractEscalationJustification, isEscalationApprovalReason, sanitizeClassifierArguments, sanitizeClassifierText } from './classifier.js'
+import { CLASSIFIER_SYSTEM_PROMPT, createDshClassifier, createHttpClassifier, extractEscalationJustification, isEscalationApprovalReason, sanitizeClassifierArguments, sanitizeClassifierText, sanitizeClassifierTextTail } from './classifier.js'
 import { resolveRoots, type RootOptions } from './paths.js'
 import { assessTool, hardDenyReason, hasSandboxEscalation, isSandboxEscalationRetry, summarizeToolArguments } from './policy.js'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
@@ -289,11 +289,7 @@ interface ProposalContextLimits {
 
 function trustedUserMessages(authority: ToolExecution['agent'], limits: ProposalContextLimits): { messages: string[]; contexts: string[] } {
   if (authority === undefined) return { messages: [], contexts: [] }
-  const messages: string[] = []
-  const contexts: string[] = []
   let remaining = 4_000
-  // proposal-context 预算：只对短指代消息配 AI 提议上下文，单条与总计都限界，避免审批 LLM token 膨胀。
-  let contextBudget = limits.maxTotalChars
 
   // 第一阶段（从前往后）：建立 ask_user_question 的 callId → 问题文本 映射（问题随 tool/call 落盘）；
   // 同时记录每条直接人类消息紧邻前的 assistant 文本，作为指代消解上下文。
@@ -318,7 +314,11 @@ function trustedUserMessages(authority: ToolExecution['agent'], limits: Proposal
   }
 
   // 第二阶段（从后往前）：收集最近的直接人类消息与问答对（最近优先）。
-  for (let index = authority.session.events.length - 1; index >= 0 && messages.length < 8 && remaining > 0; index -= 1) {
+  // 先按从新到旧收集候选（消息文本 + proposal 原文），随后在第三阶段按从旧到新分组决定
+  // proposal 上下文归属：同一 AI 回复后的消息组内只要有短指代，就把上下文附给组内最早（第一条）消息。
+  type CollectedMessage = { sanitized: string; short: boolean; proposal: string }
+  const collected: CollectedMessage[] = []
+  for (let index = authority.session.events.length - 1; index >= 0 && collected.length < 8 && remaining > 0; index -= 1) {
     const event = authority.session.events[index]
     if (event?.type === 'user/message' && event.data.source.kind === 'user') {
       const text = event.data.content
@@ -328,17 +328,8 @@ function trustedUserMessages(authority: ToolExecution['agent'], limits: Proposal
         .trim()
       if (text === '') continue
       const sanitized = sanitizeClassifierText(text).slice(0, remaining)
-      messages.push(sanitized)
+      collected.push({ sanitized, short: text.length <= limits.maxMessageLen, proposal: proposalContexts.get(index) ?? '' })
       remaining -= sanitized.length
-      // 仅当消息是短指代（可能引用 AI 方案）且上下文预算充足时，才附 AI 提议上下文；完整自足的长消息不附，省 token。
-      const proposal = proposalContexts.get(index) ?? ''
-      if (text.length <= limits.maxMessageLen && proposal !== '' && contextBudget > 0) {
-        const sanitizedContext = sanitizeClassifierText(proposal.slice(0, limits.maxChars)).slice(0, contextBudget)
-        contexts.push(sanitizedContext)
-        contextBudget -= sanitizedContext.length
-      } else {
-        contexts.push('')
-      }
       continue
     }
     if (event?.type === 'tool/result') {
@@ -349,12 +340,31 @@ function trustedUserMessages(authority: ToolExecution['agent'], limits: Proposal
         ? '[ask_user_question] 回答: ' + answer
         : '[ask_user_question] 问题: ' + question + '；回答: ' + answer
       const sanitized = sanitizeClassifierText(combined).slice(0, remaining)
-      messages.push(sanitized)
+      collected.push({ sanitized, short: false, proposal: '' })
       remaining -= sanitized.length
-      contexts.push('')
     }
   }
-  return { messages: messages.reverse(), contexts: contexts.reverse() }
+
+  // 第三阶段（从旧到新）：按「同一 AI 回复后的连续消息」分组决定 proposal 上下文归属。
+  // 组内只要有短指代需要消解，就只给组内最早（第一条）消息附上下文——不管第一条本身长短；
+  // 其余消息不附，避免同一 proposal 被重复拼接浪费 token。截断保留末尾，保证 AI 最后的问询授权不被丢弃。
+  const ordered = collected.reverse()
+  const messages = ordered.map(item => item.sanitized)
+  const contexts: string[] = new Array(ordered.length).fill('')
+  let contextBudget = limits.maxTotalChars
+  for (let i = 0; i < ordered.length; i += 1) {
+    const proposal = ordered[i].proposal
+    if (proposal === '') continue
+    let j = i
+    while (j < ordered.length && ordered[j].proposal === proposal) j += 1
+    const needsContext = ordered.slice(i, j).some(item => item.short)
+    if (needsContext && contextBudget > 0) {
+      contexts[i] = sanitizeClassifierTextTail(proposal, limits.maxChars).slice(-contextBudget)
+      contextBudget -= contexts[i].length
+    }
+    i = j - 1
+  }
+  return { messages, contexts }
 }
 
 /** 从 assistant/message 事件提取纯文本（仅 text block，忽略 tool-call 等其他块）。 */

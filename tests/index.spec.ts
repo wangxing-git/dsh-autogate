@@ -572,6 +572,57 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
     expect(input.trustedUserMessages[0]).not.toContain('ghp_abcdefghijklmnopqrst')
   })
 
+  it('超长 AI 提议：截断保留末尾，最后的问询授权不被丢弃', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any, { preflight: true })
+    const agent = agentWithEvents([
+      presetAuto,
+      assistantMessage('HEAD-MARKER' + 'x'.repeat(600) + 'TAIL-MARKER：是否授权执行该操作？'),
+      userMessage('是'),
+    ])
+    await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-proposal-tail'), async () => ({ kind: 'allow' }))
+    const input = classifierInput(capturedCalls)
+    expect(input.trustedUserMessages[0]).toContain('<proposal-context>')
+    expect(input.trustedUserMessages[0]).toContain('TAIL-MARKER')
+    expect(input.trustedUserMessages[0]).not.toContain('HEAD-MARKER')
+  })
+
+  it('同一 AI 回复后的多条短插话：proposal 上下文只附给最早的一条（去重省 token）', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any, { preflight: true })
+    const agent = agentWithEvents([
+      presetAuto,
+      assistantMessage('方案 A：执行 X；方案 B：执行 Y'),
+      userMessage('A'),
+      userMessage('还是 A'),
+    ])
+    await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-proposal-dedup'), async () => ({ kind: 'allow' }))
+    const input = classifierInput(capturedCalls)
+    expect(input.trustedUserMessages).toHaveLength(2)
+    const withContext = input.trustedUserMessages.filter((m: string) => m.includes('<proposal-context>'))
+    expect(withContext).toHaveLength(1)
+    // 渲染后按从旧到新：最早的消息（第一条）带上下文，更晚的插话不带（避免重复）。
+    expect(input.trustedUserMessages[0]).toContain('<proposal-context>')
+    expect(input.trustedUserMessages[1]).not.toContain('<proposal-context>')
+  })
+
+  it('第一条是长消息 + 后续短插话：context 仍附给第一条（不管长短）', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any, { preflight: true })
+    const agent = agentWithEvents([
+      presetAuto,
+      assistantMessage('方案 A：执行 X；方案 B：执行 Y'),
+      userMessage('这是一条很长的自足消息，超过了短指代阈值，详细说明了要做的事情'),
+      userMessage('A'),
+    ])
+    await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-proposal-long-first'), async () => ({ kind: 'allow' }))
+    const input = classifierInput(capturedCalls)
+    expect(input.trustedUserMessages).toHaveLength(2)
+    // 组内存在短指代（'A'）需要消解，context 附给组内第一条长消息，而非后续短插话。
+    expect(input.trustedUserMessages[0]).toContain('<proposal-context>')
+    expect(input.trustedUserMessages[1]).not.toContain('<proposal-context>')
+  })
+
   it('多轮对话：每条用户消息配对各自紧邻前的 AI 提议', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
     apply(ctx as any, { preflight: true })

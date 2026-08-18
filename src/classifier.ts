@@ -42,13 +42,23 @@ export function withLocaleDirective(systemPrompt: string, locale: UiLocale | und
 const SECRET_KEYS = /(?:api|auth|access|secret|private|credential|password|token|cookie|authorization).*?(?:key|value|token)?$/i
 const CONTENT_KEYS = /^(?:content|body|payload|data|text|old_string|new_string|description|justification)$/i
 
-/** 脱敏并限界单段文本（不超过 1000 字符）。 */
-export function sanitizeClassifierText(value: string): string {
+/** 密钥脱敏（不截断，供头/尾限界函数复用）。 */
+function redactSecrets(value: string): string {
   return value
     .replace(/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/g, '[redacted-secret]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{8,}/gi, 'Bearer [redacted-secret]')
     .replace(/((?:api[_-]?key|token|secret|password)=)[^&\s]+/gi, '$1[redacted-secret]')
-    .slice(0, 1000)
+}
+
+/** 脱敏并限界单段文本（保留头部，不超过 1000 字符）。 */
+export function sanitizeClassifierText(value: string): string {
+  return redactSecrets(value).slice(0, 1000)
+}
+
+/** 脱敏并限界单段文本，保留末尾（不超过 maxChars 字符）。用于 AI 提议上下文：问询授权通常在末尾，截断时保持尾部完整。 */
+export function sanitizeClassifierTextTail(value: string, maxChars: number): string {
+  const sanitized = redactSecrets(value)
+  return sanitized.length > maxChars ? sanitized.slice(-maxChars) : sanitized
 }
 
 /** 分类器网络边界前的脱敏：剥离大块内容与疑似密钥，限制深度与数量。 */
