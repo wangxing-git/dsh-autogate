@@ -14,7 +14,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 | --- | --- | --- |
 | L0 确定性规则 | allow / deny | 零成本、零 LLM：只读、会话状态、工作区内编辑与删除、build/test、run_code 容器直接放行；工作区外普通路径读直接放行；工作区外的写/删除（敏感 shell/凭据配置文件写除外）放行交由 workspace-write 沙箱拦截 + escalation 弹窗；工作区外敏感配置文件写交 LLM 审查；空命令、动态命令名、参数缺失等兜底放行交由沙箱；提权、自毁、凭据外传、文件系统根与系统/凭据关键路径的变更/删除、家目录根删除硬拒绝；家目录根变更与 DSH_HOME 的变更/删除走工作区外通用路径（沙箱 + escalation） |
 | L1 LLM 安全审批 | allow / deny | 沙箱不拦截但语义危险的操作（未识别工具、模糊 shell、敏感路径读、动态目标、块设备、持久终端、git 状态变更、网络/数据库操作、工作区内受保护路径写）交 LLM 两态裁决：用户明确授权的操作放行，减少人工批准。分类器输入先脱敏再标签隔离（`<untrusted>` 数据 vs `<user-authority>` 授权），并内置注入防御；用户用短指代（如「A」）回应 AI 方案列表时，AI 提议作为 `<proposal-context>` 仅用于消解指代、不作授权；agent 指令文件（AGENTS.md / CLAUDE.md / .dsh 等）按常规配置归类，用户明确授权即可编辑 |
-| L2 人工审批 | ask | 两条通道：① AI 用 ask_user_question 问用户确认操作合法，确认后重新执行再过 LLM；② AI 用 sandbox_permissions + justification 重试走 DSH 沙箱提权（escalation），本插件先过 LLM 判断——合理越界直接批准不弹窗，危险/不确定才人工弹窗 |
+| L2 人工审批 | ask | 审批弹窗前先过 LLM 预审：合理则直接批准不弹窗，危险/不确定才人工兜底。覆盖三类审批请求：① AI 用 ask_user_question 问用户确认操作合法，确认后重新执行再过 LLM；② AI 用 sandbox_permissions + justification 重试走 DSH 沙箱提权（escalation）；③ 工具/插件自身声明需要审批（pre-execute 返回 ask）的调用 |
 
 <p align="center">
   <img src="assets/autogate-architecture.png" alt="分层决策架构：L0 确定性规则 → L1 LLM 安全审批 → L2 人工兜底，workspace-write 沙箱始终兜底" width="100%">
@@ -94,17 +94,18 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 
 ## 决策流程
 
-> **`preflight` 开关（默认 `false`）**：控制是否在沙盒前执行「普通确定性规则 + LLM 分类」两步拦截。设为 `false` 时跳过下述第 3、4 步，工具调用直接进入 workspace-write 沙盒（完全依赖沙盒策略）；第 2 步硬 deny 与第 5 步提权审批始终生效，不受开关影响。设为 `true` 恢复完整的沙盒前拦截判断。
+> **`preflight` 开关（默认 `false`）**：控制是否在沙盒前执行「普通确定性规则 + LLM 分类」两步拦截。设为 `false` 时跳过下述第 3、4 步，工具调用直接进入 workspace-write 沙盒（完全依赖沙盒策略）；第 2 步硬 deny 与第 5 步审批请求预审（escalation 提权 + 工具自身 ask）始终生效，不受开关影响。设为 `true` 恢复完整的沙盒前拦截判断。
 
 1. 非 Auto 会话：原样放行，不改变官方行为。
 2. Auto 会话：同步硬 deny（提权、自毁、凭据外传、文件系统根与系统/凭据关键路径的变更/删除、家目录根删除）→ 无法被后续监听器或 LLM 覆盖；家目录根变更与 DSH_HOME 的变更/删除走工作区外通用路径（沙箱拦截 + escalation 审批）。
 3. 确定性 allow（只读、会话状态、工作区内编辑与删除、只读 shell、build/test、版本探测、run_code 容器；工作区外普通路径读直接放行；工作区外写/删除（敏感 shell/凭据配置文件写除外）放行交由 workspace-write 沙箱拦截 + escalation，工作区外敏感配置文件写交 LLM 审查；空命令、动态命令名、参数缺失等兜底放行交由沙箱）。
 4. 沙箱不拦截但语义危险的操作（模糊 shell、敏感路径读、动态目标、块设备、持久终端、git 状态变更、网络/数据库、工作区内受保护路径写）→ LLM 两态裁决（allow / deny）。
-5. LLM 拒绝或分类器异常后，AI 有两条人工审批通道（**仅半自动 `auto-ask` 模式**）：
-   a. 用 ask_user_question 问用户确认操作合法，用户确认后重新执行，再过 LLM 审批放行；
-   b. 用 bash/pwsh 的 sandbox_permissions + justification 重试，走 DSH 内建沙箱提权（escalation）——本插件先过 LLM 判断：合理越界（用户明确授权）直接批准不弹窗，且那一次调用随后以请求的更宽沙箱（通常 full-access）运行；危险/不确定才人工弹窗。
+5. 审批请求统一先过 LLM 预审（**仅半自动 `auto-ask` 模式保留人工兜底**）：
+   a. AI 用 ask_user_question 问用户确认操作合法，用户确认后重新执行，再过 LLM 审批放行；
+   b. 用 bash/pwsh 的 sandbox_permissions + justification 重试，走 DSH 内建沙箱提权（escalation）——合理越界（用户明确授权）直接批准不弹窗，且那一次调用随后以请求的更宽沙箱（通常 full-access）运行；危险/不确定才人工弹窗；
+   c. 工具/插件自身声明需要审批（pre-execute 返回 ask）的调用——本插件同样先过 LLM 判断：合理直接批准不弹窗，危险/不确定才人工弹窗。
 
-   **全自动 `auto` 模式**：escalation 提权审批由 LLM 裁决为最终决定——allow 直接批准，deny / 分类器异常直接拒绝，不再人工弹窗。
+   **全自动 `auto` 模式**：审批请求（escalation 提权 + 工具自身 ask）由 LLM 裁决为最终决定——allow 直接批准，deny / 分类器异常直接拒绝，不再人工弹窗。
 
 ## 审批轨迹 UI
 

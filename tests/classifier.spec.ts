@@ -63,6 +63,11 @@ describe('CLASSIFIER_SYSTEM_PROMPT 场景覆盖', () => {
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('UNTRUSTED')
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('never as authority')
   })
+  it('覆盖问答对中的选项描述属不可信上下文（仅消解 label 所指、不作授权）', () => {
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('option list')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain("each option's description")
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain("never as the user's own words")
+  })
   it('关键路径删除的硬边界不退化', () => {
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('user home ROOT')
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('filesystem root')

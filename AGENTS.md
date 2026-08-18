@@ -10,7 +10,7 @@ DeepSeek Harness 自动审批插件。在 **workspace-write 沙箱之上** 增�
 2. **沙箱保持 workspace-write**：任何改动都不得放宽为 full-access；即使 LLM 误判放行，文件写入仍由沙箱拦截 + escalation 兜底。
 3. **分层不可颠倒**：L0 硬 deny（提权、自毁、凭据外传、文件系统根与系统/凭据关键路径的变更/删除、家目录根删除）必须同步返回、后续监听器无法覆盖；家目录根变更与 DSH_HOME 的变更/删除属可授权操作，走工作区外通用路径（沙箱拦截 + escalation 审批）。L1 只在「沙箱不拦截但语义危险」时由 LLM 两态裁决；L2 由被拒绝方（AI）主动向用户发起，插件不主动弹窗。
 4. **脱敏与限界**：进入 LLM 分类器的输入必须经 `sanitizeClassifierArguments` / `sanitizeClassifierText` 处理；唯一的授权依据是「最近的直接人类消息」与 `ask_user_question` 的问答对（回答是用户授权、问题仅提供上下文），不得引入其他上下文。
-5. **`preflight` 开关（默认 `false`）**：关闭时跳过普通 L0 规则与 L1 LLM 分类，完全依赖沙盒策略；L0 硬 deny（guard）与 escalation 提权审批（approval/request）始终生效，不受开关影响。改动 pre-execute 判定顺序时不得破坏这一边界。
+5. **`preflight` 开关（默认 `false`）**：关闭时跳过普通 L0 规则与 L1 LLM 分类，完全依赖沙盒策略；L0 硬 deny（guard）与审批请求预审（approval/request：escalation 提权 + 工具自身 ask）始终生效，不受开关影响。改动 pre-execute 判定顺序时不得破坏这一边界。
 
 ## 常用命令
 
@@ -26,7 +26,7 @@ DeepSeek Harness 自动审批插件。在 **workspace-write 沙箱之上** 增�
 
 ```
 src/
-  index.ts        入口：guard + tools/pre-execute 两态判定 + 提权重试放行 + 轨迹 RPC
+  index.ts        入口：guard + tools/pre-execute 两态判定 + 审批请求预审（escalation 提权 + 工具自身 ask）+ 轨迹 RPC
   policy.ts       工具级确定性规则（L0）与危险识别
   shell.ts        bash/pwsh 静态分析（L0 硬 deny + 危险 shell 识别）
   classifier.ts   LLM 分类器（DSH 内部 LLM / 可选 HTTP 端点）+ 脱敏 + 系统提示词
@@ -73,4 +73,5 @@ lib/               编译产物（由 build 生成并纳入版本控制，勿手
 - 新增「危险操作」类别时，确认其落入 L0 硬 deny 还是 L1 分类，并检查脱敏是否覆盖。
 - 新增配置项必须：`z.object` 校验（含 default / min / max / pattern 约束）+ README 文档 + 客户端设置卡。
 - 轨迹为进程级环形缓冲（默认 200 条），只增不持久化，重启即清空；不得引入持久化副作用。
+- **`approval/request` 监听器必须 `{ prepend: true }` 注册**：本插件 bundle 的 `insert` 无锚点、落在 api-gateway（dsh-host-apiproxy）之后加载，不 prepend 则被 host-apiproxy 的 UI answerer 抢先 claim，LLM 预审（L2）永不执行。
 - 对 `cordis.patch.yml` 的修改仅限权限预设与插件注册段，保持 auto 档 `sandbox: workspace-write`。

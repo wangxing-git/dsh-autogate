@@ -5,7 +5,7 @@ import { effectivePermissionPreset } from '@deepseek-ai/dsh-permission-presets'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { CLASSIFIER_SYSTEM_PROMPT, createDshClassifier, createHttpClassifier, extractEscalationJustification, isEscalationApprovalReason, sanitizeClassifierArguments, sanitizeClassifierText, sanitizeClassifierTextTail } from './classifier.js'
 import { resolveRoots, type RootOptions } from './paths.js'
-import { assessTool, hardDenyReason, hasSandboxEscalation, isSandboxEscalationRetry, summarizeToolArguments } from './policy.js'
+import { assessTool, hardDenyReason, isSandboxEscalationRetry, summarizeToolArguments } from './policy.js'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { ClassifierInput, ClassifierTokenUsage, ManagedMode, SafetyClassifier } from './types.js'
 import { installSettingsSection, settingsNamespace, type SettingsProvider } from '@deepseek-ai/dsh-settings'
@@ -291,9 +291,12 @@ function trustedUserMessages(authority: ToolExecution['agent'], limits: Proposal
   if (authority === undefined) return { messages: [], contexts: [] }
   let remaining = 4_000
 
-  // 第一阶段（从前往后）：建立 ask_user_question 的 callId → 问题文本 映射（问题随 tool/call 落盘）；
+  // 第一阶段（从前往后）：建立 ask_user_question 的问答对映射。DSH 中 ask_user_question 经 run_code 间接调用，
+  // 问题与回答一并落在 tool/code-dispatch 事件（arguments 为已解析对象、content 为标准 answers JSON）；
+  // 直接调用场景则问题随 tool/call 落盘、回答随 tool/result 落盘，二者按 callId 配对。
   // 同时记录每条直接人类消息紧邻前的 assistant 文本，作为指代消解上下文。
   const askQuestions = new Map<string, string>()
+  const dispatchQa = new Map<number, string>()
   const proposalContexts = new Map<number, string>()
   let lastAssistant = ''
   for (let index = 0; index < authority.session.events.length; index += 1) {
@@ -301,6 +304,17 @@ function trustedUserMessages(authority: ToolExecution['agent'], limits: Proposal
     if (event?.type === 'tool/call' && event.data.name === 'ask_user_question') {
       const text = askUserQuestionsText(event.data.arguments)
       if (text !== '') askQuestions.set(String(event.data.callId), text)
+      continue
+    }
+    if (event?.type === 'tool/code-dispatch' && event.data.name === 'ask_user_question') {
+      const question = askUserQuestionsText(event.data.arguments)
+      const answer = askUserAnswerTextFromDispatch(event.data.content)
+      if (question !== '' || answer !== '') {
+        const combined = question === ''
+          ? '[ask_user_question] 回答: ' + answer
+          : '[ask_user_question] 问题: ' + question + '；回答: ' + answer
+        dispatchQa.set(index, combined)
+      }
       continue
     }
     if (event?.type === 'assistant/message') {
@@ -332,13 +346,20 @@ function trustedUserMessages(authority: ToolExecution['agent'], limits: Proposal
       remaining -= sanitized.length
       continue
     }
+    if (dispatchQa.has(index)) {
+      const sanitized = sanitizeClassifierText(dispatchQa.get(index) ?? '').slice(0, remaining)
+      collected.push({ sanitized, short: false, proposal: '' })
+      remaining -= sanitized.length
+      continue
+    }
     if (event?.type === 'tool/result') {
+      const question = askQuestions.get(String(event.data.message.source.callId))
+      // 只有确认该 tool/result 是 ask_user_question 直接调用的结果（tool/call 已落盘配对）才提取回答，
+      // 避免从任意工具输出（如 run_code 的 stdout）误提取 answers 伪造用户授权。
+      if (question === undefined) continue
       const answer = askUserAnswerText(event.data.message)
       if (answer === '') continue
-      const question = askQuestions.get(String(event.data.message.source.callId))
-      const combined = question === undefined
-        ? '[ask_user_question] 回答: ' + answer
-        : '[ask_user_question] 问题: ' + question + '；回答: ' + answer
+      const combined = '[ask_user_question] 问题: ' + question + '；回答: ' + answer
       const sanitized = sanitizeClassifierText(combined).slice(0, remaining)
       collected.push({ sanitized, short: false, proposal: '' })
       remaining -= sanitized.length
@@ -382,10 +403,14 @@ function assistantMessageText(message: unknown): string {
     .trim()
 }
 
-/** 从 ask_user_question 的 tool/call 参数（未解析的 JSON 字符串）提取问题文本。 */
-function askUserQuestionsText(rawArguments: string): string {
+/** 从 ask_user_question 的调用参数提取问题文本：tool/call 为未解析 JSON 字符串，tool/code-dispatch 为已解析对象。 */
+function askUserQuestionsText(rawArguments: unknown): string {
   let parsed: unknown
-  try { parsed = JSON.parse(rawArguments) } catch { return '' }
+  if (typeof rawArguments === 'string') {
+    try { parsed = JSON.parse(rawArguments) } catch { return '' }
+  } else {
+    parsed = rawArguments
+  }
   if (typeof parsed !== 'object' || parsed === null) return ''
   const questions = (parsed as Record<string, unknown>).questions
   if (!Array.isArray(questions)) return ''
@@ -398,8 +423,13 @@ function askUserQuestionsText(rawArguments: string): string {
     const options = Array.isArray(item.options)
       ? item.options
           .filter((option): option is Record<string, unknown> => typeof option === 'object' && option !== null)
-          .map(option => (typeof option.label === 'string' ? option.label : ''))
-          .filter(label => label !== '')
+          .map(option => {
+            const label = typeof option.label === 'string' ? option.label.trim() : ''
+            if (label === '') return ''
+            const description = typeof option.description === 'string' ? option.description.trim() : ''
+            return description === '' ? label : label + '（' + description + '）'
+          })
+          .filter(text => text !== '')
       : []
     if (title === '' && header === '' && options.length === 0) continue
     let text = title
@@ -410,29 +440,42 @@ function askUserQuestionsText(rawArguments: string): string {
   return parts.join('；')
 }
 
-/** 从 ask_user_question 的 tool/result 消息提取回答文本（答案以 compact JSON 文本呈现）。 */
-function askUserAnswerText(message: unknown): string {
-  if (typeof message !== 'object' || message === null) return ''
-  const outerBlocks = (message as Record<string, unknown>).content
-  if (!Array.isArray(outerBlocks)) return ''
-  for (const outer of outerBlocks) {
-    if (typeof outer !== 'object' || outer === null) continue
-    const blocks = (outer as Record<string, unknown>).content
-    if (!Array.isArray(blocks)) continue
-    for (const block of blocks) {
-      if (typeof block !== 'object' || block === null) continue
-      const entry = block as Record<string, unknown>
-      if (entry.type !== 'text' || typeof entry.text !== 'string') continue
+/** 从一组内容块里递归提取 ask_user_question 的回答文本（answers 以 compact JSON 文本嵌在 text block 中）。 */
+function askUserAnswerTextFromBlocks(blocks: unknown): string {
+  if (!Array.isArray(blocks)) return ''
+  for (const block of blocks) {
+    if (typeof block !== 'object' || block === null) continue
+    const entry = block as Record<string, unknown>
+    if (entry.type === 'text' && typeof entry.text === 'string') {
       let parsed: unknown
-      try { parsed = JSON.parse(entry.text) } catch { continue }
-      if (typeof parsed !== 'object' || parsed === null) continue
-      const answers = (parsed as Record<string, unknown>).answers
-      if (!Array.isArray(answers)) continue
-      const text = formatAskUserAnswers(answers)
+      try { parsed = JSON.parse(entry.text) } catch { parsed = undefined }
+      if (typeof parsed === 'object' && parsed !== null) {
+        const answers = (parsed as Record<string, unknown>).answers
+        if (Array.isArray(answers)) {
+          const text = formatAskUserAnswers(answers)
+          if (text !== '') return text
+        }
+      }
+    }
+    // 嵌套 content（tool/result 的 tool-result 块内含 content 数组）。
+    const nested = entry.content
+    if (nested !== undefined) {
+      const text = askUserAnswerTextFromBlocks(nested)
       if (text !== '') return text
     }
   }
   return ''
+}
+
+/** 从 ask_user_question 的 tool/result 消息提取回答文本（答案以 compact JSON 文本呈现）。 */
+function askUserAnswerText(message: unknown): string {
+  if (typeof message !== 'object' || message === null) return ''
+  return askUserAnswerTextFromBlocks((message as Record<string, unknown>).content)
+}
+
+/** 从 ask_user_question 的 tool/code-dispatch 结果 content 提取回答文本。 */
+function askUserAnswerTextFromDispatch(content: unknown): string {
+  return askUserAnswerTextFromBlocks(content)
 }
 
 /** 把 ask_user_question 的回答列表格式化为可读文本。 */
@@ -453,6 +496,28 @@ function formatAskUserAnswers(answers: unknown[]): string {
     parts.push(id === '' ? pieces.join('；') : id + ': ' + pieces.join('；'))
   }
   return parts.join(' | ')
+}
+
+/**
+ * 从会话事件按 callId 查找工具调用的原始参数（tool/call 事件的 arguments 为模型产出的未解析 JSON 字符串）。
+ * 工具自身声明需要审批（pre-execute 返回 ask）时，若 autogate 的 pre-execute 监听器被更早注册的
+ * 监听器短路而未执行，pendingApprovalArgs 里没有缓存——此时 tool/call 事件已在派发前落盘，
+ * 从会话事件取回参数仍能让分类器评估具体目标，而非只凭 reason 猜测。
+ */
+function toolCallArgumentsFromEvents(agent: ToolExecution['agent'], callId: string): unknown {
+  if (agent === undefined || callId === '') return undefined
+  for (const event of agent.session.events) {
+    if (event?.type !== 'tool/call') continue
+    if (String(event.data.callId) !== callId) continue
+    const raw = event.data.arguments
+    if (typeof raw !== 'string') continue
+    try {
+      return JSON.parse(raw)
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
 }
 
 /** 安装自动权限策略到官方工具流水线。 */
@@ -584,9 +649,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   // 审批轨迹：进程级环形缓冲，记录每次 Auto 决策供客户端面板拉取展示。
   const trail = createApprovalTrail()
 
-  // 带 sandbox_permissions 的提权重试：pre-execute 放行时缓存原始参数；
-  // ApprovalRequest 不携带 arguments，approval/request 阶段按 callId 取回供分类器判断具体目标。
-  const escalationArgs = new Map<string, unknown>()
+  // ApprovalRequest 不携带 arguments：pre-execute 阶段缓存原始参数，approval/request 阶段按 callId 取回，
+  // 供分类器判断具体目标。缓存同时覆盖沙箱提权重试与工具自身声明需要审批（ask）两类请求。
+  const pendingApprovalArgs = new Map<string, unknown>()
 
   const rootsFor = (exec: Readonly<ToolExecution>) => resolveRoots(exec.agent?.session.header.cwd, rootOptions)
   const parentAgent: ParentAgentLookup = sessionId => ctx.get('agents')?.get(sessionId)
@@ -660,15 +725,15 @@ export function apply(ctx: Context, config: Config = {}): void {
     // 审批耗时：从进入审批管道到做出决策的墙钟毫秒数（L0 规则 / L1 LLM 分类）。
     const startedAt = Date.now()
 
-    // 缓存所有带 sandbox_permissions 的提权重试参数（ApprovalRequest 不携带 arguments，
-    // approval/request 阶段按 callId 取回供分类器评估具体目标）。
-    if (hasSandboxEscalation(exec.arguments)) {
-      escalationArgs.set(String(exec.callId), exec.arguments)
-      // 环形上限：提权请求未到达 approval/request 时（沙箱直接拒绝未生成审批）缓存不会取回，
+    // 缓存所有带 callId 的调用参数（ApprovalRequest 不携带 arguments，approval/request 阶段按 callId 取回
+    // 供分类器评估具体目标：既覆盖沙箱提权重试，也覆盖工具自身声明需要审批的调用）。
+    if (exec.callId !== undefined) {
+      pendingApprovalArgs.set(String(exec.callId), exec.arguments)
+      // 环形上限：审批请求未到达 approval/request（沙箱直接拒绝未生成审批、调用正常完成）时缓存不会被取回，
       // 限制容量并淘汰最旧项，避免进程级内存缓慢增长。
-      if (escalationArgs.size > 100) {
-        const oldest = escalationArgs.keys().next().value
-        if (oldest !== undefined) escalationArgs.delete(oldest)
+      if (pendingApprovalArgs.size > 100) {
+        const oldest = pendingApprovalArgs.keys().next().value
+        if (oldest !== undefined) pendingApprovalArgs.delete(oldest)
       }
     }
 
@@ -723,24 +788,36 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
   })
 
-  // 沙箱提权审批：先过 LLM 判断是否合理越界，合理则直接批准（不人工弹窗）。
+  // 审批请求预审（沙箱提权 + 工具自身声明需要审批）：先过 LLM 判断是否合理，合理则直接批准（不人工弹窗）。
   // 半自动：危险/不确定委派人工兜底弹窗；全自动：LLM 裁决为最终决定，拒绝即拒绝、不再人工弹窗。
+  // prepend：本插件 bundle 的 insert 无锚点、落在 api-gateway（dsh-host-apiproxy）之后加载，
+  // 而 host-apiproxy 的 approval/request answerer 总是先 claim（弹窗）——不 prepend 则本插件的 LLM 预审
+  // 永远排在其后、不被调用。必须抢在所有 UI answerer 之前先过 LLM。
   ctx.on('approval/request', async (req, next): Promise<ApprovalOutcome> => {
-    if (!isEscalationApprovalReason(req.reason)) return next()
     const authority = managedPermissionAuthority(req.agent, parentAgent, presetName, fullAutoPresetName)
     if (authority === undefined) return next()
     const mode = authority.mode
-    // 审批耗时：提权审批从进入本监听器到 LLM 预审得出结论的墙钟毫秒数。
+    // 审批耗时：审批请求从进入本监听器到 LLM 预审得出结论的墙钟毫秒数。
     const startedAt = Date.now()
-    const justification = extractEscalationJustification(req.reason)
+
+    // 审批来源：沙箱提权（reason 以 escalate sandbox to 开头）与工具自身声明需要审批（其余 reason）。
+    // 二者都先过 LLM 预审，仅在 reason 提取方式与 policyReason 前缀上不同。
+    const escalation = isEscalationApprovalReason(req.reason)
+    const reason = escalation ? extractEscalationJustification(req.reason) : (req.reason ?? '')
+    // 工具自身 ask 可能不携带 reason（PreToolDecision 的 ask.reason 可选）：以工具名兜底，保证分类器有上下文。
+    const reasonText = reason.trim() === '' ? 'tool ' + req.toolName + ' requires approval' : reason
     const callId = req.callId === undefined ? '' : String(req.callId)
-    const summary = justification.replace(/\s+/g, ' ').trim().slice(0, 80)
+    const summary = reasonText.replace(/\s+/g, ' ').trim().slice(0, 80)
     try {
       const route = modelRoute(authority.agent)
       const roots = resolveRoots(authority.agent.session.header.cwd, rootOptions)
-      // 取回提权调用的原始参数（含 file_path/content），让分类器评估具体目标，而非只凭 justification 猜测。
-      const rawArguments = escalationArgs.get(callId) ?? { justification }
-      escalationArgs.delete(callId)
+      // 取回原始参数（含 file_path/content/command），让分类器评估具体目标，而非只凭 reason 猜测。
+      // 优先用 pre-execute 缓存；未命中（如工具 pre-execute 监听器短路了本插件）时回退到会话事件里的 tool/call 参数；
+      // 仍无则用 reason 兜底（分类器信息不足时倾向 fail-closed）。
+      const rawArguments = pendingApprovalArgs.get(callId)
+        ?? toolCallArgumentsFromEvents(authority.agent, callId)
+        ?? { reason }
+      pendingApprovalArgs.delete(callId)
       const { messages: trustedMessages, contexts: proposalContexts } = trustedUserMessages(authority.agent, {
         maxMessageLen: proposalContextMaxMessageLen,
         maxChars: proposalContextMaxChars,
@@ -750,7 +827,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         toolName: req.toolName,
         arguments: sanitizeClassifierArguments(rawArguments),
         workspaceRoot: roots.workspace,
-        policyReason: 'sandbox escalation request: ' + sanitizeClassifierText(justification),
+        policyReason: (escalation ? 'sandbox escalation request: ' : 'tool approval request: ') + sanitizeClassifierText(reasonText),
         trustedUserMessages: trustedMessages,
         proposalContexts,
         ...(route === undefined ? {} : { route }),
@@ -764,13 +841,13 @@ export function apply(ctx: Context, config: Config = {}): void {
     } catch (error: unknown) {
       // 分类器异常：半自动 fail-closed 到人工弹窗；全自动直接拒绝。保留具体错误并写日志，便于上报排查。
       const message = error instanceof Error ? error.message : String(error)
-      ctx.logger.warn('autogate: L2 提权预审分类器异常（工具: ' + req.toolName + '）', error)
+      ctx.logger.warn('autogate: L2 审批预审分类器异常（工具: ' + req.toolName + '）', error)
       recordTrailEntry({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: 'classifier unavailable: ' + message, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent) })
     }
     // 全自动：LLM 裁决为最终决定，直接拒绝不再人工弹窗；半自动：委派人工兜底。
     if (mode === 'full-auto') return 'rejected'
     return next()
-  })
+  }, { prepend: true })
 
   // 审批轨迹查询端点：客户端通过 connection.rpc.call('/autogate', 'trail') 拉取。
   // connection 服务由 client-connection 在自身 fiber 中 provide，本插件 apply 时可能尚未激活；
