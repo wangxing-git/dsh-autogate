@@ -3,3 +3,6 @@ node_modules/
 .DS_Store
 coverage/
 .idea
+.playwright-mcp/
+dsh-autogate-promo.mp4
+promo/
