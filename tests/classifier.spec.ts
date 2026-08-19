@@ -116,10 +116,11 @@ describe('createDshClassifier 审查提示词', () => {
     trustedUserMessages: [],
     route: { provider: 'p', model: 'm' },
   }
-  function runtime(captured: { system?: string }) {
+  function runtime(captured: { system?: string; reasoningEffort?: unknown }) {
     return {
       stream: async function* (options: any) {
         captured.system = options.system
+        captured.reasoningEffort = options.reasoningEffort
         yield { type: 'text-delta', index: 0, text: '{"decision":"allow","reason":"ok"}' }
         yield { type: 'finish', reason: { kind: 'stop' } }
       },
@@ -136,6 +137,12 @@ describe('createDshClassifier 审查提示词', () => {
     const classifier = createDshClassifier(runtime(captured) as any, { timeoutMs: 1000, systemPrompt: 'custom review prompt' })
     await classifier.classify(input as any, new AbortController().signal)
     expect(captured.system).toBe('custom review prompt')
+  })
+  it('审批分类请求显式关闭思考（reasoningEffort: off）', async () => {
+    const captured: { system?: string; reasoningEffort?: unknown } = {}
+    const classifier = createDshClassifier(runtime(captured) as any, { timeoutMs: 1000 })
+    await classifier.classify(input as any, new AbortController().signal)
+    expect(captured.reasoningEffort).toBe('off')
   })
   it('多 part 按 index 乱序到达仍正确拼接', async () => {
     const runtime = {

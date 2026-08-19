@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, Message, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { ClassifierDecision, ClassifierInput, ClassifierTokenUsage, SafetyClassifier } from './types.js'
 import type { UiLocale } from './i18n.js'
@@ -189,6 +190,9 @@ export function createDshClassifier(runtime: LlmStreamRuntime, config: DshClassi
         const response = await collectResponse(runtime, {
           provider: route.provider,
           model: route.model,
+          // 审批分类只做两态裁决，不需要思考：显式 off 让 deepseek-official 等默认思考的适配器发送
+          // thinking: { type: "disabled" }，避免思考耗时超过 classifierTimeoutMs 导致 fail-closed 误拒。
+          reasoningEffort: ReasoningEffortId('off'),
           messages: [classifierMessage(input)],
           system: withLocaleDirective(systemPrompt, config.locale?.()),
           temperature: 0,
