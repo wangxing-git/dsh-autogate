@@ -14,7 +14,8 @@ vi.mock('@deepseek-ai/dsh-client-runtime/client', () => {
   return { createSnapshotStore: fakeStore }
 })
 
-import { CardForm, RpcSettingsSource, TrailController, boolField, en, formatDuration, formatTime, numberField, selectField, textField, zh } from '../src/client-logic.js'
+import Schema from '@deepseek-ai/schemastery'
+import { ApiSettingsSource, CardForm, TrailController, boolField, en, formatDuration, formatTime, numberField, pairedReset, pairedResetField, selectField, textField, zh } from '../src/client-logic.js'
 
 describe('formatTime', () => {
   it('格式化为本地 HH:MM:SS', () => {
@@ -36,6 +37,30 @@ describe('formatDuration', () => {
     expect(formatDuration(-1)).toBe('—')
     expect(formatDuration(Number.NaN)).toBe('—')
     expect(formatDuration(Number.POSITIVE_INFINITY)).toBe('—')
+  })
+})
+
+describe('pairedResetField 成对字段联动', () => {
+  it('classifierProvider ↔ classifierModel 成对', () => {
+    expect(pairedResetField('classifierProvider')).toBe('classifierModel')
+    expect(pairedResetField('classifierModel')).toBe('classifierProvider')
+  })
+  it('无成对关系的字段返回 undefined', () => {
+    expect(pairedResetField('preflight')).toBeUndefined()
+    expect(pairedResetField('classifierEndpoint')).toBeUndefined()
+  })
+})
+
+describe('pairedReset 联动重置', () => {
+  it('重置成对字段 → 联动重置另一字段', () => {
+    const calls: string[] = []
+    pairedReset({ resetField: (field: string) => calls.push(field) }, 'classifierProvider')
+    expect(calls).toEqual(['classifierProvider', 'classifierModel'])
+  })
+  it('重置非成对字段 → 只重置自身', () => {
+    const calls: string[] = []
+    pairedReset({ resetField: (field: string) => calls.push(field) }, 'preflight')
+    expect(calls).toEqual(['preflight'])
   })
 })
 
@@ -83,7 +108,7 @@ describe('CardForm staged 编辑与保存', () => {
     return {
       getSnapshot: () => snapshot,
       subscribe: (cb: () => void) => { subscriber = cb },
-      write: async (set: Record<string, unknown>, unset: string[]) => { writes.push({ set, unset }); return true },
+      write: async (set: Record<string, unknown>, unset: string[]) => { writes.push({ set, unset }); return { ok: true, message: '' } },
       _writes: writes,
       _notify: () => subscriber?.(),
     }
@@ -196,54 +221,195 @@ describe('CardForm staged 编辑与保存', () => {
     form.setOptions('classifierProvider', ['deepseek', 'openai'])
     expect(form.field('classifierProvider').options).toEqual(['deepseek', 'openai'])
   })
-})
 
-describe('RpcSettingsSource RPC 数据源', () => {
-  it('拉取成功 → status ready 且透传 value/user/writable', async () => {
-    const source = new RpcSettingsSource({ call: async () => ({ ok: true, value: { writable: true, value: { preflight: true }, user: { preflight: true } } }) })
-    await source.refresh()
-    expect(source.getSnapshot()).toEqual({ status: 'ready', writable: true, value: { preflight: true }, user: { preflight: true }, inherited: {} })
+  it('save 失败 → failedMessage 透传服务端拒绝原因', async () => {
+    const scope = {
+      getSnapshot: () => ({ status: 'ready', writable: true, value: { preflight: true }, user: { preflight: true } }),
+      subscribe: () => {},
+      write: async () => ({ ok: false, message: 'classifierProvider 与 classifierModel 必须成对配置' }),
+    }
+    const form = new CardForm(scope, [boolField('preflight')])
+    form.actions().edit('preflight', 'false')
+    await form.save()
+    expect(form.shell().failed).toBe(true)
+    expect(form.shell().failedMessage).toBe('classifierProvider 与 classifierModel 必须成对配置')
   })
 
-  it('RPC 返回非 ok → status unavailable', async () => {
-    const source = new RpcSettingsSource({ call: async () => ({ ok: false, error: { code: 'unavailable' } }) })
+  it('save 成功或重新编辑 → failedMessage 清空', async () => {
+    const scope = mockScope({ status: 'ready', writable: true, value: { preflight: true }, user: { preflight: true } })
+    const form = new CardForm(scope, [boolField('preflight')])
+    form.actions().edit('preflight', 'false')
+    await form.save()
+    expect(form.shell().failed).toBe(false)
+    expect(form.shell().failedMessage).toBe('')
+  })
+
+  it('重新编辑 / 重置 / 放弃 → failedMessage 清空', async () => {
+    let reject = true
+    const scope = {
+      getSnapshot: () => ({ status: 'ready', writable: true, value: { preflight: true }, user: { preflight: true } }),
+      subscribe: () => {},
+      write: async () => reject ? { ok: false, message: 'classifierProvider 与 classifierModel 必须成对配置' } : { ok: true, message: '' },
+    }
+    const form = new CardForm(scope, [boolField('preflight')])
+    form.actions().edit('preflight', 'false')
+    await form.save()
+    expect(form.shell().failedMessage).toBe('classifierProvider 与 classifierModel 必须成对配置')
+    reject = false
+    form.actions().edit('preflight', 'true')
+    expect(form.shell().failedMessage).toBe('')
+    await form.save()
+    form.actions().resetField('preflight')
+    expect(form.shell().failedMessage).toBe('')
+    form.actions().discard()
+    expect(form.shell().failedMessage).toBe('')
+  })
+})
+
+describe('ApiSettingsSource 官方 settings 通道数据源', () => {
+  /** 构造最小 settings API mock：describe 返回 namespace 视图，mutate 记录批量 ops。 */
+  function mockApi(overrides: Record<string, unknown> = {}) {
+    let view: any = {
+      ns: 'autogate',
+      value: { preflight: true },
+      base: {},
+      user: { preflight: true },
+      revision: 1,
+      schema: Schema.object({ preflight: Schema.boolean().default(false) }).toJSON(),
+    }
+    const mutations: any[] = []
+    const api: any = {
+      describe: async () => ({ result: { ok: true, value: { namespaces: [view], writable: true } } }),
+      mutate: async (payload: any) => { mutations.push(payload); return { result: { ok: true, value: view } } },
+      _setView: (next: any) => { view = next },
+      _mutations: mutations,
+    }
+    for (const [k, v] of Object.entries(overrides)) api[k] = v
+    return api
+  }
+
+  it('拉取成功 → status ready 且透传 value/user/revision，inherited 合成 schema 默认值', async () => {
+    const api = mockApi()
+    const source = new ApiSettingsSource(api, 'autogate')
+    await source.refresh()
+    expect(source.getSnapshot().status).toBe('ready')
+    expect(source.getSnapshot().value).toEqual({ preflight: true })
+    expect(source.getSnapshot().user).toEqual({ preflight: true })
+    expect(source.getSnapshot().revision).toBe(1)
+    expect(source.getSnapshot().inherited).toEqual({ preflight: false })
+  })
+
+  it('inherited = schema 默认值合并 base（base 覆盖默认值）', async () => {
+    const api = mockApi()
+    api._setView({
+      ns: 'autogate', value: { preflight: true }, base: { preflight: true }, user: { preflight: true }, revision: 1,
+      schema: Schema.object({ preflight: Schema.boolean().default(false) }).toJSON(),
+    })
+    const source = new ApiSettingsSource(api, 'autogate')
+    await source.refresh()
+    expect(source.getSnapshot().inherited).toEqual({ preflight: true })
+  })
+
+  it('无 default 的标量字段在 inherited 中补空值键（重置预览不回退当前值）', async () => {
+    const api = mockApi()
+    api._setView({
+      ns: 'autogate', value: { classifierProvider: 'deepseek' }, base: {}, user: { classifierProvider: 'deepseek' }, revision: 1,
+      schema: Schema.object({
+        classifierProvider: Schema.string(),
+        classifierModel: Schema.string(),
+        preflight: Schema.boolean().default(false),
+      }).toJSON(),
+    })
+    const source = new ApiSettingsSource(api, 'autogate')
+    await source.refresh()
+    // 无 default 的 string 字段补空字符串键，有 default 的字段保留默认值
+    expect(source.getSnapshot().inherited).toEqual({ classifierProvider: '', classifierModel: '', preflight: false })
+  })
+
+  it('schema envelope 损坏 → inherited 降级为 base', async () => {
+    const api = mockApi()
+    api._setView({ ns: 'autogate', value: {}, base: { presetName: 'auto-ask' }, user: {}, revision: 1, schema: { broken: true } })
+    const source = new ApiSettingsSource(api, 'autogate')
+    await source.refresh()
+    expect(source.getSnapshot().inherited).toEqual({ presetName: 'auto-ask' })
+  })
+
+  it('describe 返回非 ok → status unavailable', async () => {
+    const api = mockApi({ describe: async () => ({ result: { ok: false } }) })
+    const source = new ApiSettingsSource(api, 'autogate')
     await source.refresh()
     expect(source.getSnapshot().status).toBe('unavailable')
   })
 
-  it('RPC 抛错 → 保持上一份快照（初始 loading）', async () => {
-    const source = new RpcSettingsSource({ call: async () => { throw new Error('down') } })
+  it('namespace 未暴露 → status unavailable', async () => {
+    const api = mockApi({ describe: async () => ({ result: { ok: true, value: { namespaces: [], writable: true } } }) })
+    const source = new ApiSettingsSource(api, 'autogate')
+    await source.refresh()
+    expect(source.getSnapshot().status).toBe('unavailable')
+  })
+
+  it('describe 抛错 → 保持上一份快照（初始 loading）', async () => {
+    const api = mockApi({ describe: async () => { throw new Error('down') } })
+    const source = new ApiSettingsSource(api, 'autogate')
     await source.refresh()
     expect(source.getSnapshot().status).toBe('loading')
   })
 
-  it('write 成功 → 返回 true 并刷新快照', async () => {
-    let snapshot: any = { status: 'ready', writable: true, value: { preflight: false }, user: {} }
-    const source = new RpcSettingsSource({
-      call: async (_channel: string, endpoint: string, payload: any) => {
-        if (endpoint === 'settings.get') return { ok: true, value: snapshot }
-        if (endpoint === 'settings.write') {
-          snapshot = { status: 'ready', writable: true, value: { preflight: payload.set.preflight }, user: { preflight: true } }
-          return { ok: true, value: true }
-        }
-        throw new Error('unknown endpoint')
-      },
-    })
+  it('write 成功 → 批量 ops 落到 mutate（含 expectedRevision）并刷新', async () => {
+    const api = mockApi()
+    const source = new ApiSettingsSource(api, 'autogate')
     await source.refresh()
-    expect(await source.write({ preflight: true }, [])).toBe(true)
-    expect(source.getSnapshot().value).toEqual({ preflight: true })
+    expect(await source.write({ preflight: false }, ['classifierPrompt'])).toEqual({ ok: true, message: '' })
+    expect(api._mutations).toHaveLength(1)
+    expect(api._mutations[0]).toEqual({
+      ns: 'autogate',
+      ops: [
+        { op: 'set', path: ['preflight'], value: false },
+        { op: 'unset', path: ['classifierPrompt'] },
+      ],
+      expectedRevision: 1,
+    })
   })
 
-  it('write 失败 → 返回 false', async () => {
-    const source = new RpcSettingsSource({ call: async () => ({ ok: false, error: { code: 'rejected' } }) })
-    expect(await source.write({ preflight: true }, [])).toBe(false)
+  it('revision 缺失 → mutate 不携带 expectedRevision', async () => {
+    const api = mockApi()
+    api._setView({ ns: 'autogate', value: { preflight: true }, base: {}, user: {}, revision: undefined, schema: {} })
+    const source = new ApiSettingsSource(api, 'autogate')
+    await source.refresh()
+    expect(await source.write({ preflight: false }, [])).toEqual({ ok: true, message: '' })
+    expect(api._mutations[0].expectedRevision).toBeUndefined()
   })
 
-  it('rpc 缺失 → unavailable 且 write 返回 false', async () => {
-    const source = new RpcSettingsSource(undefined)
+  it('write 失败 → 返回 ok:false 且透传服务端拒绝原因', async () => {
+    const api = mockApi({ mutate: async () => ({ result: { ok: false, error: { code: 'settings-rejected', message: 'classifierProvider 与 classifierModel 必须成对配置', details: { ns: 'autogate' } } } }) })
+    const source = new ApiSettingsSource(api, 'autogate')
+    expect(await source.write({ preflight: true }, [])).toEqual({ ok: false, message: 'classifierProvider 与 classifierModel 必须成对配置' })
+  })
+
+  it('write 失败（revision 冲突）→ 刷新快照恢复最新 revision', async () => {
+    let view: any = {
+      ns: 'autogate', value: { preflight: true }, base: {}, user: { preflight: true }, revision: 1,
+      schema: Schema.object({ preflight: Schema.boolean().default(false) }).toJSON(),
+    }
+    const api: any = {
+      describe: async () => ({ result: { ok: true, value: { namespaces: [view], writable: true } } }),
+      mutate: async () => {
+        view = { ...view, revision: 2 }
+        return { result: { ok: false, error: { code: 'settings-conflict', message: '配置已被其他客户端修改', details: { ns: 'autogate', expected: 1, actual: 2 } } } }
+      },
+    }
+    const source = new ApiSettingsSource(api, 'autogate')
+    await source.refresh()
+    expect(source.getSnapshot().revision).toBe(1)
+    expect(await source.write({ preflight: false }, [])).toEqual({ ok: false, message: '配置已被其他客户端修改' })
+    expect(source.getSnapshot().revision).toBe(2)
+  })
+
+  it('api 缺失 → unavailable 且 write 返回 ok:false', async () => {
+    const source = new ApiSettingsSource(undefined, 'autogate')
     await source.refresh()
     expect(source.getSnapshot().status).toBe('unavailable')
-    expect(await source.write({}, [])).toBe(false)
+    expect(await source.write({}, [])).toEqual({ ok: false, message: '设置服务不可用' })
   })
 })
 

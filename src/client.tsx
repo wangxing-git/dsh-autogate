@@ -1,6 +1,6 @@
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState } from 'react'
-import { CardForm, RpcSettingsSource, SETTINGS_NS, TrailController, boolField, en, formatDuration, formatTime, numberField, selectField, textField, zh } from './client-logic.js'
+import { ApiSettingsSource, CardForm, SETTINGS_NS, TrailController, boolField, en, formatDuration, formatTime, numberField, pairedReset, pairedResetField, selectField, textField, zh } from './client-logic.js'
 
 // ==== 卡片样式（复用 DSH 主题变量，运行时注入） ====
 const CSS = `.sa_card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;list-style:none}
@@ -105,7 +105,7 @@ class SafeAutoCardController {
   store: any
   llmApi: any
 
-  constructor(settingsSource: RpcSettingsSource, llmApi: any) {
+  constructor(settingsSource: ApiSettingsSource, llmApi: any) {
     this.llmApi = llmApi
     this.form = new CardForm(settingsSource, [
       textField('presetName'),
@@ -147,9 +147,13 @@ class SafeAutoCardController {
   }
 
   inject() {
+    const actions = this.form.actions()
     return {
       hooks: { safeAutoCard: this.store },
-      ...this.form.actions(),
+      ...actions,
+      // 成对字段联动重置：classifierProvider/classifierModel 须成对配置，重置其一须同步重置另一，
+      // 否则保存时服务端 validateConfig 的成对约束拒绝（fail-closed）。
+      resetField: (field: string) => pairedReset(actions, field),
       setOptions: (field: string, options: readonly string[]) => this.form.setOptions(field, options),
       fetchModelCatalog: () => this.fetchModelCatalog(),
     }
@@ -379,7 +383,7 @@ function SafeAutoCard(props: any) {
               jsxs('div', {
                 className: 'sa_footer',
                 children: [
-                  state.failed ? jsx('p', { className: 'sa_failed', children: t('saveFailed') }) : null,
+                  state.failed ? jsx('p', { className: 'sa_failed', children: state.failedMessage || t('saveFailed') }) : null,
                   state.saved ? jsx('p', { className: 'sa_saved', children: t('saved') }) : null,
                   jsx('button', { type: 'button', className: 'sa_btn sa_btnDiscard', disabled: !state.dirty || state.saving, onClick: props.discard, children: t('discard') }),
                   jsx('button', { type: 'button', className: 'sa_btn sa_btnSave', disabled: blocked, onClick: props.save, children: t(state.saving ? 'saving' : 'save') }),
@@ -520,12 +524,13 @@ function apply(ctx: any) {
   injectCss()
   ctx.effect(() => ctx.locale.register(SETTINGS_NS, { zh, en }), 'autogate: card dictionaries')
   const t = ctx.locale.bind(SETTINGS_NS)
+  // rpc 仅剩审批轨迹面板使用（/autogate trail 端点）；设置卡读写改走官方 settings API。
   const rpc = ctx.connection?.rpc
   // 复用 DSH 宿主现成的模型目录 API（llm.models），与对话框模型选择器同源。
   const llmApi = ctx.connection?.api?.llm
   // 设置卡与轨迹浮窗共享同一个 settings 数据源：设置卡保存 showTrail 后，
   // TrailController 经订阅即时启停轮询，无需重新拉取。
-  const settingsSource = new RpcSettingsSource(rpc)
+  const settingsSource = new ApiSettingsSource(ctx.connection?.api?.settings, SETTINGS_NS)
   const controller = new SafeAutoCardController(settingsSource, llmApi)
   // 新版 DSH 中 settings.plugin.item 是 keyed slot：key 即卡片所编辑的 settings
   // namespace（autogate），设置页按 namespace 分发渲染；keyed slot 不再接受 id/order。

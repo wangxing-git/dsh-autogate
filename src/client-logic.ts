@@ -1,7 +1,29 @@
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import Schema from '@deepseek-ai/schemastery'
 
 /** autogate 的 settings 命名空间（与服务端 settingsNamespace('autogate') 一致）。 */
 export const SETTINGS_NS = 'autogate'
+
+/**
+ * 成对字段组：重置其一须联动重置另一，否则保存时服务端 validateConfig 的成对约束拒绝。
+ * 键为被重置字段，值为须联动重置的成对字段。
+ */
+export const PAIRED_RESET_FIELDS: Readonly<Record<string, string>> = {
+  classifierProvider: 'classifierModel',
+  classifierModel: 'classifierProvider',
+}
+
+/** 返回重置某字段时应联动重置的成对字段；无成对关系时返回 undefined。 */
+export function pairedResetField(field: string): string | undefined {
+  return PAIRED_RESET_FIELDS[field]
+}
+
+/** 执行重置并联动重置成对字段（classifierProvider ↔ classifierModel）；服务端成对约束要求清空其一须同步清空另一。 */
+export function pairedReset(actions: { resetField(field: string): void }, field: string): void {
+  actions.resetField(field)
+  const paired = pairedResetField(field)
+  if (paired !== undefined) actions.resetField(paired)
+}
 
 // ==== 字段转换 spec ====
 
@@ -63,6 +85,8 @@ export class CardForm {
   saving = false
   failed = false
   saved = false
+  /** 最近一次保存失败的具体原因（服务端拒绝文本，如成对约束）；成功或重新编辑后清空。 */
+  failedMessage = ''
 
   constructor(scope: any, specs: any[]) {
     this.scope = scope
@@ -85,6 +109,7 @@ export class CardForm {
       invalid: [...this.staged.entries()].some(([field, staged]) => this.fieldInvalid(field, staged)),
       saving: this.saving,
       failed: this.failed,
+      failedMessage: this.failedMessage,
       saved: this.saved,
     }
   }
@@ -128,10 +153,10 @@ export class CardForm {
 
   actions() {
     return {
-      edit: (field: string, text: string) => { this.staged.set(field, { text, clear: false }); this.saved = false; this.publish() },
-      resetField: (field: string) => { this.staged.set(field, { text: '', clear: true }); this.saved = false; this.publish() },
+      edit: (field: string, text: string) => { this.staged.set(field, { text, clear: false }); this.saved = false; this.failedMessage = ''; this.publish() },
+      resetField: (field: string) => { this.staged.set(field, { text: '', clear: true }); this.saved = false; this.failedMessage = ''; this.publish() },
       save: () => this.save(),
-      discard: () => { this.staged.clear(); this.failed = false; this.saved = false; this.publish() },
+      discard: () => { this.staged.clear(); this.failed = false; this.failedMessage = ''; this.saved = false; this.publish() },
     }
   }
 
@@ -145,6 +170,7 @@ export class CardForm {
     if (this.staged.size === 0 || this.saving) return
     this.saving = true
     this.failed = false
+    this.failedMessage = ''
     this.publish()
     // 一次性收集全部 staged 变更并批量提交：跨字段约束（如 provider/model 成对）须在最终态校验，
     // 逐字段写会让中间态被 settings 服务拒绝。
@@ -163,7 +189,14 @@ export class CardForm {
       set[field] = parsed.value
     }
     if (landed && (Object.keys(set).length > 0 || unset.length > 0)) {
-      landed = await this.scope.write(set, unset)
+      const outcome = await this.scope.write(set, unset)
+      landed = outcome !== null && typeof outcome === 'object' && outcome.ok === true
+      if (!landed) {
+        // 透传服务端拒绝原因（如「classifierProvider 与 classifierModel 必须成对配置」）到设置卡。
+        this.failedMessage = outcome !== null && typeof outcome === 'object' && typeof outcome.message === 'string'
+          ? outcome.message
+          : ''
+      }
     }
     if (landed) {
       this.staged.clear()
@@ -177,37 +210,79 @@ export class CardForm {
   publish() { for (const l of this.listeners) l() }
 }
 
-// ==== 设置卡数据源：自有 RPC（/autogate settings.*），沿用 rc.6 绕过 settingsScope namespace 白名单的实现（rc.7 已移除白名单，此处保留自有 RPC 读写） ====
-export class RpcSettingsSource {
-  store: any
-  rpc: any
+/** 设置卡写结果：ok 表示写入成功；失败时 message 携带服务端拒绝原因（如成对约束）。 */
+export interface WriteResult {
+  ok: boolean
+  message: string
+}
 
-  constructor(rpc: any) {
-    this.rpc = rpc
-    this.store = createSnapshotStore({ status: 'loading', writable: false, value: {}, user: {}, inherited: {} })
+// ==== 设置卡数据源：走 DSH 官方客户端 settings API（describe/mutate），替代自有 RPC ====
+// 批量 mutate 保留跨字段约束（如 provider/model 成对）的原子性；schemastery rehydrate 求
+// schema 默认值并合并 composition base，合成 inherited 供「重置」即时预览（与服务端原
+// settingsGet 的 Config({}) + base 语义一致）。
+export class ApiSettingsSource {
+  store: any
+  api: any
+  namespace: string
+
+  constructor(api: any, namespace: string) {
+    this.api = api
+    this.namespace = namespace
+    this.store = createSnapshotStore({ status: 'loading', writable: false, value: {}, user: {}, inherited: {}, revision: undefined })
     void this.refresh()
   }
 
   async refresh() {
-    if (this.rpc === undefined || typeof this.rpc.call !== 'function') {
-      this.store.set({ status: 'unavailable', writable: false, value: {}, user: {}, inherited: {} })
+    if (this.api === undefined || typeof this.api.describe !== 'function') {
+      this.store.set({ status: 'unavailable', writable: false, value: {}, user: {}, inherited: {}, revision: undefined })
       return
     }
     try {
-      const result = await this.rpc.call('/autogate', 'settings.get', {})
-      if (result !== null && typeof result === 'object' && result.ok === true && result.value !== null && typeof result.value === 'object') {
-        this.store.set({
-          status: 'ready',
-          writable: result.value.writable === true,
-          value: result.value.value ?? {},
-          user: result.value.user ?? {},
-          inherited: result.value.inherited ?? {},
-        })
-      } else {
-        this.store.set({ status: 'unavailable', writable: false, value: {}, user: {}, inherited: {} })
+      const response = await this.api.describe({})
+      const result = response?.result
+      if (result?.ok !== true || !Array.isArray(result.value?.namespaces)) {
+        this.store.set({ status: 'unavailable', writable: false, value: {}, user: {}, inherited: {}, revision: undefined })
+        return
       }
+      const writable = result.value.writable === true
+      const view = result.value.namespaces.find((candidate: any) => String(candidate.ns) === this.namespace)
+      if (view === undefined) {
+        // 该 namespace 未对客户端暴露：标记 unavailable（保留 writable，与官方 settingsScope 一致）。
+        this.store.set({ status: 'unavailable', writable, value: {}, user: {}, inherited: {}, revision: undefined })
+        return
+      }
+      this.store.set({
+        status: 'ready',
+        writable,
+        value: view.value ?? {},
+        user: view.user ?? {},
+        inherited: this.resolveInherited(view),
+        revision: view.revision,
+      })
     } catch {
       // 拉取失败保持上一份快照
+    }
+  }
+
+  /** 合成 inherited = schema 默认值 合并 composition base；schema envelope 损坏时降级为 base。 */
+  private resolveInherited(view: any): Record<string, unknown> {
+    const base = view.base !== null && typeof view.base === 'object' ? view.base as Record<string, unknown> : {}
+    try {
+      const schema = new Schema(view.schema)
+      const parsed = schema({})
+      const resolved = typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : {}
+      // 补全 schema 声明的所有字段键：无 default 的标量字段（如 z.string()）在 schema 解析时被省略，
+      // 但「重置」预览需要它们有键（值为空）以区别于「schema 未声明的字段」——后者才回退当前值。
+      // 注：.dict 为 schemastery Object schema 的内部结构（非公开 API），此处依赖其键清单；envelope 异常时由外层 catch 降级为 base。
+      const dict = (schema as any).dict as Record<string, unknown> | undefined
+      if (dict !== undefined) {
+        for (const field of Object.keys(dict)) {
+          if (!Object.hasOwn(resolved, field)) resolved[field] = ''
+        }
+      }
+      return { ...resolved, ...base }
+    } catch {
+      return base
     }
   }
 
@@ -215,17 +290,33 @@ export class RpcSettingsSource {
 
   subscribe(listener: () => void) { return this.store.subscribe(listener) }
 
-  async write(set: Record<string, unknown>, unset: string[]): Promise<boolean> {
-    if (this.rpc === undefined || typeof this.rpc.call !== 'function') return false
+  async write(set: Record<string, unknown>, unset: string[]): Promise<WriteResult> {
+    if (this.api === undefined || typeof this.api.mutate !== 'function') {
+      return { ok: false, message: '设置服务不可用' }
+    }
+    const ops = [
+      ...Object.entries(set).map(([field, value]) => ({ op: 'set' as const, path: [field], value })),
+      ...unset.map((field) => ({ op: 'unset' as const, path: [field] })),
+    ]
+    if (ops.length === 0) return { ok: true, message: '' }
     try {
-      const result = await this.rpc.call('/autogate', 'settings.write', { set, unset })
-      if (result !== null && typeof result === 'object' && result.ok === true) {
+      const revision = this.getSnapshot().revision
+      const response = await this.api.mutate({
+        ns: this.namespace,
+        ops,
+        ...(revision === undefined ? {} : { expectedRevision: revision }),
+      })
+      if (response?.result?.ok === true) {
         await this.refresh()
-        return true
+        return { ok: true, message: '' }
       }
-      return false
+      // 提取服务端拒绝原因（settings-rejected / settings-conflict 的 message 即 validateConfig 的约束文本）。
+      const error = (response?.result as any)?.error
+      // 写失败（如 revision 冲突）后刷新快照恢复最新 revision，避免本地停留在过期版本导致后续保存持续被拒。
+      await this.refresh()
+      return { ok: false, message: error?.message ?? '保存被拒绝' }
     } catch {
-      return false
+      return { ok: false, message: '保存失败（网络或服务异常）' }
     }
   }
 }
@@ -235,7 +326,7 @@ export class TrailController {
   store: any
   timer: any
   rpc: any
-  settings: RpcSettingsSource
+  settings: ApiSettingsSource
   sessions: any
   records: any[] = []
   enabled = true
@@ -245,7 +336,7 @@ export class TrailController {
   private unsubscribeSettings: (() => void) | undefined
   private unsubscribeSessions: (() => void) | undefined
 
-  constructor(rpc: any, settings: RpcSettingsSource, sessions?: any) {
+  constructor(rpc: any, settings: ApiSettingsSource, sessions?: any) {
     this.rpc = rpc
     this.settings = settings
     this.sessions = sessions
@@ -368,9 +459,9 @@ export const zh = {
   fullAutoPresetName: '全自动权限预设键',
   fullAutoPresetNameHint: '全自动模式预设键（默认 auto）：LLM 裁决为最终决定，不再人工弹窗兜底',
   classifierProvider: '分类 provider',
-  classifierProviderHint: '固定分类 provider，须与分类模型成对配置',
+  classifierProviderHint: '固定分类 provider，须与分类模型成对配置；重置其中一项会联动清空另一项',
   classifierModel: '分类模型',
-  classifierModelHint: '固定分类模型，须与分类 provider 成对配置',
+  classifierModelHint: '固定分类模型，须与分类 provider 成对配置；重置其中一项会联动清空另一项',
   classifierEndpoint: '分类端点',
   classifierEndpointHint: '独立 OpenAI 兼容分类端点（HTTPS；loopback 可用 http），留空复用会话模型',
   classifierPrompt: '审查提示词',
@@ -430,9 +521,9 @@ export const en = {
   fullAutoPresetName: 'Full-auto permission preset',
   fullAutoPresetNameHint: 'Full-auto preset key (default auto): the LLM decision is final, no human fallback prompt',
   classifierProvider: 'Classifier provider',
-  classifierProviderHint: 'Fixed classifier provider; must be paired with the model',
+  classifierProviderHint: 'Fixed classifier provider; must be paired with the model — resetting either one clears both',
   classifierModel: 'Classifier model',
-  classifierModelHint: 'Fixed classifier model; must be paired with the provider',
+  classifierModelHint: 'Fixed classifier model; must be paired with the provider — resetting either one clears both',
   classifierEndpoint: 'Classifier endpoint',
   classifierEndpointHint: 'Standalone OpenAI-compatible endpoint (HTTPS; loopback HTTP ok); empty reuses the session model',
   classifierPrompt: 'Review prompt',

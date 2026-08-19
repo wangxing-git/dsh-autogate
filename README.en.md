@@ -51,7 +51,7 @@ This plugin is a **decision layer that reduces manual approvals — not a securi
 
 Configuration is wired through the DSH settings service (`ctx.settings`): write an `autogate:` section in `$DSH_HOME/settings.yaml` and it hot-reloads immediately; when the settings service is not mounted, it falls back to the entry config in `cordis.patch.yml` (`config: {}`).
 
-> **About the settings UI**: DSH 0.1.0-rc.7 drops the rc.6 hard-coded allowlist (`WEB_SETTINGS_NAMESPACES`) for third-party namespaces and lets plugins register their own settings cards through the keyed slot (`settings.plugin.item`, keyed by namespace). This plugin keeps its own `/autogate` RPC endpoints (`settings.get` / `settings.write`) for settings I/O — carried over from rc.6 and working without patching the official package. Writes land in `$DSH_HOME/settings.yaml` under `autogate:` and hot-reload, exactly as the manual section below.
+> **About the settings UI**: DSH 0.1.0-rc.7 drops the rc.6 hard-coded allowlist (`WEB_SETTINGS_NAMESPACES`) for third-party namespaces and lets plugins register their own settings cards through the keyed slot (`settings.plugin.item`, keyed by namespace). This plugin's settings card reads and writes through the official DSH client settings API (`describe` / `mutate` on `ctx.connection.api.settings`; the batch `mutate` keeps cross-field constraints such as the provider/model pairing atomic). The approval trail panel still pulls through the plugin's own `/autogate` RPC endpoint (`trail`). Writes land in `$DSH_HOME/settings.yaml` under `autogate:` and hot-reload, exactly as the manual section below.
 
     autogate:
       preflight: false                 # pre-sandbox interception switch: true runs deterministic rules + LLM classification, false (default) relies entirely on the sandbox
@@ -105,7 +105,7 @@ While the plugin is active, a floating **Approval trail** toggle appears in the 
 ## Directory structure
 
     src/
-      index.ts         Entry: guard + tools/pre-execute two-state decision + escalation retry allow + approval-trail & settings RPC
+      index.ts         Entry: guard + tools/pre-execute two-state decision + escalation retry allow + approval-trail RPC
       policy.ts        Tool-level deterministic rules (L0) and danger detection
       shell.ts         bash/pwsh static analysis (L0 hard deny + dangerous shell detection)
       classifier.ts    LLM classifier (DSH built-in LLM / optional HTTP endpoint) + sanitization + tag separation + injection defense + system prompt
@@ -113,7 +113,7 @@ While the plugin is active, a floating **Approval trail** toggle appears in the 
       trail.ts         Approval trail (process-level ring buffer, append-only, not persisted)
       types.ts         Shared types
       client.tsx       Settings UI card + approval-trail panel (client bundle)
-      client-logic.ts  Client UI logic (settings RPC source / form controller / trail controller / i18n strings)
+      client-logic.ts  Client UI logic (official settings API source / form controller / trail controller / i18n strings)
     tests/             Tests (paths / shell / policy / classifier / trail / settings / client-logic / index)
     scripts/
       build-client.mjs     Client bundle build script

@@ -67,7 +67,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 
 配置经 DSH settings 服务（`ctx.settings`）接入：在 `$DSH_HOME/settings.yaml` 写 `autogate:` 段即时热重载；未挂载 settings 服务时回退 `cordis.patch.yml` 的 entry config（`config: {}`）。
 
-> **关于设置 UI**：DSH 0.1.0-rc.7 已移除 rc.6 对第三方插件 namespace 的硬编码 allowlist（`WEB_SETTINGS_NAMESPACES`），并支持插件经 keyed slot（`settings.plugin.item`，`key` 即 namespace）自行注册设置卡片。本插件沿用自有 `/autogate` RPC 端点（`settings.get` / `settings.write`）读写设置——该实现自 rc.6 保留至今、无需改官方包即可显示卡片，写入落在 `$DSH_HOME/settings.yaml` 的 `autogate:` 段并热重载，与下方手动配置完全一致。
+> **关于设置 UI**：DSH 0.1.0-rc.7 已移除 rc.6 对第三方插件 namespace 的硬编码 allowlist（`WEB_SETTINGS_NAMESPACES`），并支持插件经 keyed slot（`settings.plugin.item`，`key` 即 namespace）自行注册设置卡片。本插件的设置卡读写走 DSH 官方客户端 settings API（`ctx.connection.api.settings` 的 `describe` / `mutate`，批量 `mutate` 保留跨字段约束如 provider/model 成对的原子性）；审批轨迹面板仍经自有 `/autogate` RPC 端点（`trail`）拉取。写入落在 `$DSH_HOME/settings.yaml` 的 `autogate:` 段并热重载，与下方手动配置完全一致。
 
     autogate:
       preflight: false                 # 沙盒前拦截判断开关：true 执行确定性规则+LLM 分类，false（默认）完全依赖沙盒
@@ -125,7 +125,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 ## 目录结构
 
     src/
-      index.ts         入口：guard + tools/pre-execute 两态判定 + 提权重试放行 + 审批轨迹/设置读写 RPC
+      index.ts         入口：guard + tools/pre-execute 两态判定 + 提权重试放行 + 审批轨迹 RPC
       policy.ts        工具级确定性规则（L0）与危险识别
       shell.ts         bash/pwsh 静态分析（L0 硬 deny + 危险 shell 识别）
       classifier.ts    LLM 分类器（DSH 内部 LLM / 可选 HTTP 端点）+ 脱敏 + 标签隔离 + 注入防御 + 系统提示词
@@ -133,7 +133,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
       trail.ts         审批轨迹（进程级环形缓冲，只增不持久化）
       types.ts         共享类型
       client.tsx       设置 UI 卡片 + 审批轨迹面板（客户端 bundle）
-      client-logic.ts  客户端 UI 逻辑（设置 RPC 数据源 / 表单控制器 / 审批轨迹控制器 / i18n 文案）
+      client-logic.ts  客户端 UI 逻辑（官方 settings API 数据源 / 表单控制器 / 审批轨迹控制器 / i18n 文案）
     tests/             测试（paths / shell / policy / classifier / trail / settings / client-logic / index）
     scripts/
       build-client.mjs     客户端 bundle 构建脚本
