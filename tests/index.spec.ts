@@ -999,6 +999,149 @@ describe('managedPermissionAuthority', () => {
   })
 })
 
+describe('session/created 监听器（子代理 approval 放开）', () => {
+  function makeSession(origin: string, parentSession?: string) {
+    const appended: Array<[string, unknown]> = []
+    return {
+      appended,
+      session: {
+        header: parentSession === undefined ? { origin } : { origin, parentSession },
+        append: (type: string, data: unknown) => { appended.push([type, data]) },
+      },
+    }
+  }
+
+  it('Auto 父会话的子代理 → 放开为 ask', () => {
+    const parent = { session: { events: [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
+    const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
+    apply(ctx as any)
+    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const { appended, session } = makeSession('subagent', 'sess-parent')
+    listener(session)
+    expect(appended).toEqual([['approval/policy', { policy: 'ask' }]])
+  })
+
+  it('非子代理 session → 不放开', () => {
+    const { ctx, listeners } = createMockContext(allowChunks)
+    apply(ctx as any)
+    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const { appended, session } = makeSession('primary')
+    listener(session)
+    expect(appended).toHaveLength(0)
+  })
+
+  it('非 Auto 父会话的子代理 → 不放开', () => {
+    const parent = { session: { events: [{ type: 'permission/preset', data: { preset: 'read-only' } }], header: { origin: 'primary' } } }
+    const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
+    apply(ctx as any)
+    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const { appended, session } = makeSession('subagent', 'sess-parent')
+    listener(session)
+    expect(appended).toHaveLength(0)
+  })
+
+  it('父 agent 缺失 → 不放开（fail-closed）', () => {
+    const { ctx, listeners } = createMockContext(allowChunks)
+    apply(ctx as any)
+    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const { appended, session } = makeSession('subagent', 'sess-missing')
+    listener(session)
+    expect(appended).toHaveLength(0)
+  })
+
+  it('孙代理（父自身也是 subagent）沿 parentSession 链找到顶层 Auto 祖先 → 放开为 ask', () => {
+    const top = { session: { events: [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
+    const middle = { session: { events: [], header: { origin: 'subagent', parentSession: 'sess-top' } } }
+    const agentsMap = new Map([['sess-top', top], ['sess-middle', middle]])
+    const { ctx, listeners } = createMockContext(allowChunks, agentsMap)
+    apply(ctx as any)
+    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const { appended, session } = makeSession('subagent', 'sess-middle')
+    listener(session)
+    expect(appended).toEqual([['approval/policy', { policy: 'ask' }]])
+  })
+
+  it('子代理 session 初始已含 delegation 的 never，放开后 ask 后写覆盖（never 后跟 ask）', () => {
+    const parent = { session: { events: [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
+    const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
+    apply(ctx as any)
+    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const events: any[] = [{ type: 'approval/policy', data: { policy: 'never', source: 'delegation' } }]
+    const session = {
+      header: { origin: 'subagent', parentSession: 'sess-parent' },
+      events,
+      append: (type: string, data: unknown) => { events.push({ type, data }) },
+    }
+    listener(session)
+    expect(events.map(e => (e.type === 'approval/policy' ? e.data.policy : e.type))).toEqual(['never', 'ask'])
+  })
+})
+
+describe('子代理提权 LLM 终审（不转人工弹窗）', () => {
+  const subagentChild = () => ({
+    session: { events: [], header: { cwd: '/ws', id: 'sess-child', origin: 'subagent', parentSession: 'sess-auto' } },
+    options: { provider: 'deepseek', model: 'deepseek-chat' },
+  })
+
+  it('半自动父会话 + 子代理 + LLM deny → rejected（不 next）', async () => {
+    const parent = autoAgent()
+    const { ctx, listeners } = createMockContext(denyChunks, new Map([['sess-auto', parent]]))
+    apply(ctx as any)
+    const answerer = listeners.get('approval/request')![0]
+    const next = async (): Promise<ApprovalOutcome> => 'allowed-once'
+    expect(await answerer({ agent: subagentChild(), toolName: 'bash', reason: 'escalate sandbox to danger-full-access: 提交代码', signal: undefined }, next)).toBe('rejected')
+  })
+
+  it('半自动父会话 + 子代理 + LLM allow → allowed-once', async () => {
+    const parent = autoAgent()
+    const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-auto', parent]]))
+    apply(ctx as any)
+    const answerer = listeners.get('approval/request')![0]
+    const next = async (): Promise<ApprovalOutcome> => 'rejected'
+    expect(await answerer({ agent: subagentChild(), toolName: 'bash', reason: 'escalate sandbox to danger-full-access: 提交代码', signal: undefined }, next)).toBe('allowed-once')
+  })
+
+  it('半自动父会话 + 子代理 + LLM 异常 → rejected（fail-closed，不 next）', async () => {
+    const parent = autoAgent()
+    const { ctx, listeners } = createMockContext(null, new Map([['sess-auto', parent]]))
+    apply(ctx as any)
+    const answerer = listeners.get('approval/request')![0]
+    const next = async (): Promise<ApprovalOutcome> => 'allowed-once'
+    expect(await answerer({ agent: subagentChild(), toolName: 'bash', reason: 'escalate sandbox to danger-full-access: 提交代码', signal: undefined }, next)).toBe('rejected')
+  })
+
+  it('子代理提权 → 分类器输入携带 subagent: true', async () => {
+    const parent = autoAgent()
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks, new Map([['sess-auto', parent]]))
+    apply(ctx as any)
+    const answerer = listeners.get('approval/request')![0]
+    const next = async (): Promise<ApprovalOutcome> => 'rejected'
+    await answerer({ agent: subagentChild(), toolName: 'bash', reason: 'escalate sandbox to danger-full-access: 提交代码', signal: undefined }, next)
+    const lastInput = JSON.parse(capturedCalls[capturedCalls.length - 1].messages[0].content[0].text)
+    expect(lastInput.subagent).toBe(true)
+  })
+
+  it('主代理提权 → 分类器输入不含 subagent 字段', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any)
+    const answerer = listeners.get('approval/request')![0]
+    const next = async (): Promise<ApprovalOutcome> => 'rejected'
+    await answerer(escalationReq(), next)
+    const lastInput = JSON.parse(capturedCalls[capturedCalls.length - 1].messages[0].content[0].text)
+    expect(lastInput.subagent).toBeUndefined()
+  })
+
+  it('半自动父会话 + 子代理 + 普通工具 ask（非 escalation）+ LLM deny → rejected（不 next）', async () => {
+    const parent = autoAgent()
+    const { ctx, listeners } = createMockContext(denyChunks, new Map([['sess-auto', parent]]))
+    apply(ctx as any)
+    const answerer = listeners.get('approval/request')![0]
+    const next = async (): Promise<ApprovalOutcome> => 'allowed-once'
+    const req = { agent: subagentChild(), toolName: 'write', reason: '写入全局配置文件需人工确认', signal: undefined }
+    expect(await answerer(req, next)).toBe('rejected')
+  })
+})
+
 /** 构造 settings 就绪的 mock Context，用于验证服务端跟随 locale.preference 生成理由。 */
 function createLocaleContext() {
   const listeners = new Map<string, any[]>()

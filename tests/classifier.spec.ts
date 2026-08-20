@@ -105,6 +105,15 @@ describe('CLASSIFIER_SYSTEM_PROMPT 场景覆盖', () => {
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('resolve what the short user message refers to')
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('never on its own as a reason to allow or deny')
   })
+  it('覆盖子代理提权更严格门槛（无人工兜底、默认 fail-closed）', () => {
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('SUBAGENT FINAL DECISION')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('"subagent": true')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('NO interactive approval channel')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('STRICTER bar')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('git repository lives outside the workspace')
+    // 子代理即触发（不再要求 escalation reason）；非 escalation 审批同样走终审、无人工兜底。
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('For a non-escalation approval request from a subagent, apply the same final-decision logic with no human fallback')
+  })
 })
 
 describe('createDshClassifier 审查提示词', () => {

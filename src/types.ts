@@ -18,6 +18,8 @@ export interface ClassifierInput {
   proposalContexts?: string[]
   /** 当前会话的 provider/model 路由（供 DSH 内部分类器复用）。 */
   route?: { provider: string; model: string }
+  /** 请求是否来自子代理（origin=subagent）：子代理提权无人工兜底，分类器须施加更严格的 fail-closed 门槛。 */
+  subagent?: boolean
 }
 
 /** 一次审查 LLM 调用的 token 消耗。 */

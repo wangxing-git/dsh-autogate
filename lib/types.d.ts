@@ -19,6 +19,8 @@ export interface ClassifierInput {
         provider: string;
         model: string;
     };
+    /** 请求是否来自子代理（origin=subagent）：子代理提权无人工兜底，分类器须施加更严格的 fail-closed 门槛。 */
+    subagent?: boolean;
 }
 /** 一次审查 LLM 调用的 token 消耗。 */
 export interface ClassifierTokenUsage {

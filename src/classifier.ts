@@ -31,6 +31,7 @@ export const CLASSIFIER_SYSTEM_PROMPT = [
   '',
   'STEP 5 — Write an actionable reason (one or two sentences, self-contained — it is shown to the user). For deny, state (a) what makes the operation dangerous and (b) what the caller should confirm with the user to proceed safely. For allow, state briefly why it is safe.',
   '',
+  'SUBAGENT FINAL DECISION — When the input has "subagent": true, the request comes from a delegated subagent that has NO interactive approval channel: your decision is final, it cannot ask the human, and an allow grants the wider access immediately. Apply a STRICTER bar. For a sandbox escalation (policyReason begins with "sandbox escalation request"): ALLOW only when (a) a trusted user message explicitly authorizes widening access for this concrete target, or (b) the escalation is an unambiguous, routine, reversible development write the stated task already implies — for example committing code when the git repository lives outside the workspace; DENY when the escalation reaches destructive, credential, or exfiltration targets, widens to full access without a concrete safe need, or has no trusted user message supporting it. For a non-escalation approval request from a subagent, apply the same final-decision logic with no human fallback. When in doubt, deny.',
   'When genuinely uncertain between allow and deny, deny (fail-closed).',
 ].join('\n')
 
@@ -138,6 +139,7 @@ function classifierMessage(input: ClassifierInput): Message {
         arguments: wrapUntrustedStrings(input.arguments),
         workspaceRoot: input.workspaceRoot,
         policyReason: tagUntrusted(input.policyReason),
+        ...(input.subagent === true ? { subagent: true } : {}),
         trustedUserMessages: input.trustedUserMessages.map((message, index) => {
           const authority = '<user-authority>' + message + '</user-authority>'
           const context = input.proposalContexts?.[index]

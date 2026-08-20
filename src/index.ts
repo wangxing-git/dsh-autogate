@@ -6,7 +6,7 @@ import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { CLASSIFIER_SYSTEM_PROMPT, createDshClassifier, createHttpClassifier, extractEscalationJustification, isEscalationApprovalReason, sanitizeClassifierArguments, sanitizeClassifierText, sanitizeClassifierTextTail } from './classifier.js'
 import { resolveRoots, type RootOptions } from './paths.js'
 import { assessTool, hardDenyReason, isSandboxEscalationRetry, summarizeToolArguments } from './policy.js'
-import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
+import { setApprovalPolicy, type ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { ClassifierInput, ClassifierTokenUsage, ManagedMode, SafetyClassifier } from './types.js'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { createApprovalTrail, type ApprovalDecision, type ApprovalLayer } from './trail.js'
@@ -563,6 +563,32 @@ export function apply(ctx: Context, config: Config = {}): void {
   const parentAgent: ParentAgentLookup = sessionId => ctx.get('agents')?.get(sessionId)
   const authorityFor = (exec: Readonly<ToolExecution>) => managedPermissionAuthority(exec.agent, parentAgent, presetName, fullAutoPresetName)
 
+  // 子代理被 DSH 硬编码 approval=never（dsh-subagent 的 appendDelegatedPolicyOverrides），其提权请求会在
+  // approval/request 事件触发前被 decide() 短路拒绝，LLM 终审收不到。对「父会话是托管 Auto」的子代理把
+  // approval 改回 ask，让提权请求走到 approval/request 由 LLM 终审裁决；非 Auto 子代理保持 DSH 默认
+  // never（fail-closed，不放开）。
+  // 时序依赖：dsh-subagent 在子代理 session 未发布窗口（unpublished creation window）内追加 delegation 的
+  // never，而 session/created 在 announce（发布）时触发、晚于该窗口，故此处追加的 ask 覆盖 never 生效；
+  // 若 DSH 未来改为在 announce 之后追加 delegation 覆盖，本放开逻辑会失效需重新评估。
+  ctx.on('session/created', (session) => {
+    const header = session.header
+    if (header.origin !== 'subagent') return
+    const parentId = header.parentSession
+    const parent = parentId === undefined ? undefined : parentAgent(parentId)
+    if (parent === undefined) {
+      // 父会话 agent 未就绪或已释放；保持 DSH 默认 never。
+      ctx.logger.debug('autogate: 子代理父会话 agent 未就绪或已释放，保持默认 never')
+      return
+    }
+    // 沿 parentSession 链判断是否存在托管 Auto 祖先（含父自身也是子代理的多级链）。
+    if (managedPermissionAuthority(parent, parentAgent, presetName, fullAutoPresetName) === undefined) {
+      // 父会话非托管 Auto；保持 DSH 默认 never。
+      ctx.logger.debug('autogate: 子代理父会话非托管 Auto，保持默认 never')
+      return
+    }
+    setApprovalPolicy(session, 'ask')
+  })
+
   /** 取 agent 所属会话的 id（字符串）；无 agent 或无 header.id 时返回空字符串。 */
   const sessionIdOf = (agent: ToolExecution['agent']): string => {
     const id = agent?.session.header.id
@@ -703,6 +729,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     const authority = managedPermissionAuthority(req.agent, parentAgent, presetName, fullAutoPresetName)
     if (authority === undefined) return next()
     const mode = authority.mode
+    // 子代理（origin=subagent）无可靠人工弹窗通道：其一切审批（沙箱提权 + 工具自身 ask）LLM 终审拒绝即拒绝，不转人工兜底。
+    const subagentDenyFinal = req.agent?.session?.header?.origin === 'subagent'
     // 审批耗时：审批请求从进入本监听器到 LLM 预审得出结论的墙钟毫秒数。
     const startedAt = Date.now()
 
@@ -736,6 +764,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         policyReason: (escalation ? 'sandbox escalation request: ' : 'tool approval request: ') + sanitizeClassifierText(reasonText),
         trustedUserMessages: trustedMessages,
         proposalContexts,
+        ...(subagentDenyFinal ? { subagent: true } : {}),
         ...(route === undefined ? {} : { route }),
       }
       const decision = await classifier.classify(classifierInput, req.signal ?? new AbortController().signal)
@@ -743,15 +772,15 @@ export function apply(ctx: Context, config: Config = {}): void {
         recordTrailEntry({ callId, toolName: req.toolName, summary, decision: 'allow', layer: 'L2', reason: decision.reason, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent), classifierInput, tokenUsage: decision.usage })
         return 'allowed-once'
       }
-      recordTrailEntry({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: decision.reason, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent), classifierInput, tokenUsage: decision.usage })
+      recordTrailEntry({ callId, toolName: req.toolName, summary, decision: (mode === 'full-auto' || subagentDenyFinal) ? 'deny' : 'ask', layer: 'L2', reason: decision.reason, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent), classifierInput, tokenUsage: decision.usage })
     } catch (error: unknown) {
       // 分类器异常：半自动 fail-closed 到人工弹窗；全自动直接拒绝。保留具体错误并写日志，便于上报排查。
       const message = error instanceof Error ? error.message : String(error)
       ctx.logger.warn('autogate: L2 审批预审分类器异常（工具: ' + req.toolName + '）', error)
-      recordTrailEntry({ callId, toolName: req.toolName, summary, decision: mode === 'full-auto' ? 'deny' : 'ask', layer: 'L2', reason: 'classifier unavailable: ' + message, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent) })
+      recordTrailEntry({ callId, toolName: req.toolName, summary, decision: (mode === 'full-auto' || subagentDenyFinal) ? 'deny' : 'ask', layer: 'L2', reason: 'classifier unavailable: ' + message, durationMs: Date.now() - startedAt, sessionId: sessionIdOf(authority.agent) })
     }
-    // 全自动：LLM 裁决为最终决定，直接拒绝不再人工弹窗；半自动：委派人工兜底。
-    if (mode === 'full-auto') return 'rejected'
+    // 全自动与子代理：LLM 裁决为最终决定，直接拒绝不再人工弹窗；半自动主代理：委派人工兜底。
+    if (mode === 'full-auto' || subagentDenyFinal) return 'rejected'
     return next()
   }, { prepend: true })
 
