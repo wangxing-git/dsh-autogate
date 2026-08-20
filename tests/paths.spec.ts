@@ -121,6 +121,15 @@ describe('isCriticalPath', () => {
   it('普通用户目录不命中', () => {
     expect(isCriticalPath('/home/u/Documents/notes.txt', roots)).toBe(false)
   })
+  it('/usr/local 为本地管理员软件区，不视为关键路径', () => {
+    expect(isCriticalPath('/usr/local/bin/brew', roots)).toBe(false)
+    expect(isCriticalPath('/usr/local/Cellar/node/1.0', roots)).toBe(false)
+    expect(isCriticalPath('/usr/local', roots)).toBe(false)
+  })
+  it('/usr 本体与系统目录仍为关键路径', () => {
+    expect(isCriticalPath('/usr/bin/node', roots)).toBe(true)
+    expect(isCriticalPath('/usr/lib/x.so', roots)).toBe(true)
+  })
 })
 
 describe('normalizePath win32 与 isWithin 风格', () => {

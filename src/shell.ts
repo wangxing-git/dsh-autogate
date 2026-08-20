@@ -30,21 +30,89 @@ function privilegeReason(mode: ManagedMode | undefined, locale: UiLocale | undef
 /** 提权命令名（命令分段 + tokenize 识别首命令，覆盖 s'u'do 等引号拼接绕过，且不把参数/文本里的 sudo 误判为提权）。 */
 const PRIVILEGE_ESCALATION_COMMANDS = new Set(['sudo', 'doas', 'su'])
 
-/** 自毁 / 系统级破坏命令名（tokenize 后识别，覆盖引号拼接绕过）。 */
-const SELF_DESTRUCTIVE_COMMANDS = new Set(['killall', 'pkill', 'taskkill', 'stop-process', 'shutdown', 'reboot', 'halt', 'poweroff', 'mkfs', 'format-volume', 'clear-disk'])
+/**
+ * 自毁 / 系统级破坏命令名（tokenize 后识别，覆盖引号拼接绕过）。
+ * 进程杀手（killall / pkill / taskkill / stop-process）已降级 L1 语义审查：
+ * 杀普通进程可恢复、且 kill <pid> 与复合写法本就交 L1，全量 L0 的边际防护有限；
+ * 系统级破坏（关机 / 重启 / 格式化）无合法 AI 场景，维持确定性硬 deny。
+ */
+const SELF_DESTRUCTIVE_COMMANDS = new Set(['shutdown', 'reboot', 'halt', 'poweroff', 'mkfs', 'format-volume', 'clear-disk'])
 
-/** 凭据 / 私钥敏感标记（用于外传检测）。 */
-const SENSITIVE_MARKER = /(?:\.ssh[\\/]|\.gnupg[\\/]|\.aws[\\/]|\.kube[\\/]|\.credentials\.yaml|id_(?:rsa|ed25519)|(?:API|AUTH|ACCESS|SECRET)[_-]?KEY|TOKEN|PASSWORD)/i
+/** 敏感凭据「文件」引用：私钥 / 云凭据等文件系统里的秘密，随网络命令外发即确定性外传（无论目标，含回环）。 */
+const SENSITIVE_FILE_REFERENCE = /(?:\.ssh[\\/]|\.gnupg[\\/]|\.aws[\\/]|\.kube[\\/]|\.credentials\.yaml|id_(?:rsa|ed25519))/i
 
-/** 网络下载 / 外发命令。 */
-const NETWORK_COMMAND = /(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod)/i
+/** 敏感凭据「文本」标记：PASSWORD / TOKEN / *KEY 等内联于请求体或头部的字样，需结合外发目标判定。 */
+const SENSITIVE_TEXT_MARKER = /(?:(?:API|AUTH|ACCESS|SECRET)[_-]?KEY|TOKEN|PASSWORD)/i
+
+/** 网络下载 / 外发命令名（命令分段 + tokenize 识别命令位置，避免参数/文本里的 curl 字样误判为网络操作）。 */
+const NETWORK_COMMAND_NAMES = new Set(['curl', 'wget', 'invoke-webrequest', 'invoke-restmethod', 'curl.exe', 'wget.exe'])
+
+/** 提取段内全部 http(s) URL 的 host 部分（含 IPv6 方括号形态）。 */
+const URL_HOST_PATTERN = /https?:\/\/(\[[^\]\s"']+|[^\s'"\\<>]+)/gi
+
+/** 回环目标判定：localhost 及其子域（RFC 6761）、127/8、[::1]、0.0.0.0——数据未离开本机。 */
+function isLoopbackHost(rawHost: string): boolean {
+  let host = rawHost
+  if (host.startsWith('[')) {
+    const close = host.indexOf(']')
+    host = close === -1 ? host.slice(1) : host.slice(1, close)
+  } else {
+    const at = host.lastIndexOf('@')
+    if (at !== -1) host = host.slice(at + 1)
+    const cut = host.search(/[/:]/)
+    if (cut > 0) host = host.slice(0, cut)
+  }
+  host = host.toLowerCase()
+  if (host === 'localhost' || host.endsWith('.localhost')) return true
+  if (host === '::1' || host === '0.0.0.0') return true
+  return /^127(?:\.\d{1,3}){3}$/.test(host)
+}
+
+/** 网络外发段：命令位置为网络命令的命令段（echo/grep 等参数文本里的 curl 字样不计入）。 */
+function networkSegments(source: string): string[] {
+  const segments: string[] = []
+  for (const segment of commandSegments(source)) {
+    const tokens = tokenize(segment)
+    const name = commandName(tokens[0] ?? '')
+    if (name !== '' && NETWORK_COMMAND_NAMES.has(name)) segments.push(segment)
+  }
+  return segments
+}
+
+/**
+ * 凭据外传硬 deny（精确分层）：
+ * - 敏感凭据「文件」引用：网络命令外发私钥 / 云凭据文件，确定性外传，无论目标一律拒绝；
+ * - 敏感凭据「文本」标记：PASSWORD / TOKEN / KEY 字样内联于请求体或头部时，仅外部目标构成「外传」
+ *   ——全部 URL 目标为本机回环地址则豁免（如本机登录 API 测试，数据未出本机，交 L1 语义审查）；
+ *   目标不可判定（无 URL / 变量展开）时 fail-closed 维持拒绝。
+ */
+function exfiltrationReason(source: string, locale?: UiLocale): string | undefined {
+  const segments = networkSegments(source)
+  if (segments.length === 0) return undefined
+  const denied = reasonText(locale, '不允许凭据或私密数据外传', 'credential or private-data exfiltration pattern is not permitted') + noEscalationHint(locale)
+  for (const segment of segments) {
+    if (SENSITIVE_FILE_REFERENCE.test(segment)) return denied
+  }
+  if (!segments.some((segment) => SENSITIVE_TEXT_MARKER.test(segment))) return undefined
+  const hosts: string[] = []
+  for (const segment of segments) {
+    for (const match of segment.matchAll(URL_HOST_PATTERN)) {
+      const host = match[1]
+      if (host !== undefined && host !== '') hosts.push(host)
+    }
+  }
+  // 回环豁免：要求目标可识别且全部为回环；否则（含目标不可判定）仍按外传拒绝。
+  if (hosts.length > 0 && hosts.every((host) => isLoopbackHost(host))) return undefined
+  return denied
+}
 
 /** 确定性硬 deny：不依赖解析器，直接正则熔断。 */
 export function hardDenyShellReason(source: string, _shell: ShellKind, _roots: PolicyRoots, locale?: UiLocale, mode?: ManagedMode): string | undefined {
   const compact = source.trim()
   if (containsCommand(compact, PRIVILEGE_ESCALATION_COMMANDS)) return privilegeReason(mode, locale)
   if (containsCommand(compact, SELF_DESTRUCTIVE_COMMANDS)) return reasonText(locale, '不允许自毁或系统级命令', 'self-destructive or system-level command is not permitted') + noEscalationHint(locale)
-  if (NETWORK_COMMAND.test(compact) && SENSITIVE_MARKER.test(compact)) return reasonText(locale, '不允许凭据或私密数据外传', 'credential or private-data exfiltration pattern is not permitted') + noEscalationHint(locale)
+  const exfiltration = exfiltrationReason(compact, locale)
+  if (exfiltration !== undefined) return exfiltration
   if (/rm\s+(?:-[a-z]*[fr][a-z]*\s+)*\/(?:\s|$)/.test(compact)) return reasonText(locale, '不允许删除文件系统根', 'deleting the filesystem root is not permitted') + noEscalationHint(locale)
   if (/(?:rm|Remove-Item)\s+(?:-[a-z]*[fr][a-z]*\s+)*(?:~|\$HOME|\$env:HOME)(?:\s|$)/i.test(compact)) return reasonText(locale, '不允许删除用户家目录', 'deleting the user home root is not permitted') + noEscalationHint(locale)
   return undefined

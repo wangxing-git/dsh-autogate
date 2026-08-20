@@ -8,7 +8,7 @@ DeepSeek Harness 自动审批插件。在 **workspace-write 沙箱之上** 增�
 
 1. **fail-closed**：分类器异常 / 超时 / 无路由 / 输出格式错误一律拒绝（deny），不得退化为放行。
 2. **沙箱保持 workspace-write**：任何改动都不得放宽为 full-access；即使 LLM 误判放行，文件写入仍由沙箱拦截 + escalation 兜底。
-3. **分层不可颠倒**：L0 硬 deny（提权、自毁、凭据外传、文件系统根与系统/凭据关键路径的变更/删除、家目录根删除）必须同步返回、后续监听器无法覆盖；家目录根变更与 DSH_HOME 的变更/删除属可授权操作，走工作区外通用路径（沙箱拦截 + escalation 审批）。L1 只在「沙箱不拦截但语义危险」时由 LLM 两态裁决；L2 由被拒绝方（AI）主动向用户发起，插件不主动弹窗。
+3. **分层不可颠倒**：L0 硬 deny（提权、系统级自毁（shutdown/reboot/halt/poweroff/mkfs 等；进程杀手 killall/pkill/taskkill/stop-process 已降级 L1 语义审查）、凭据外传、文件系统根与系统/凭据关键路径（/usr/local 除外）的变更/删除、家目录根删除）必须同步返回、后续监听器无法覆盖；家目录根变更、DSH_HOME 与 /usr/local 的变更/删除属可授权操作，走工作区外通用路径（沙箱拦截 + escalation 审批）。L1 只在「沙箱不拦截但语义危险」时由 LLM 两态裁决；L2 由被拒绝方（AI）主动向用户发起，插件不主动弹窗。
 4. **脱敏与限界**：进入 LLM 分类器的输入必须经 `sanitizeClassifierArguments` / `sanitizeClassifierText` 处理；唯一的授权依据是「最近的直接人类消息」与 `ask_user_question` 的问答对（回答是用户授权、问题仅提供上下文），不得引入其他上下文。
 5. **`preflight` 开关（默认 `false`）**：关闭时跳过普通 L0 规则与 L1 LLM 分类，完全依赖沙盒策略；L0 硬 deny（guard）与审批请求预审（approval/request：escalation 提权 + 工具自身 ask）始终生效，不受开关影响。改动 pre-execute 判定顺序时不得破坏这一边界。
 

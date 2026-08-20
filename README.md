@@ -12,8 +12,8 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 
 | 层 | 决策 | 说明 |
 | --- | --- | --- |
-| L0 确定性规则 | allow / deny | 零成本、零 LLM：只读、会话状态、工作区内编辑与删除、build/test、run_code 容器直接放行；工作区外普通路径读直接放行；工作区外的写/删除（敏感 shell/凭据配置文件写除外）放行交由 workspace-write 沙箱拦截 + escalation 弹窗；工作区外敏感配置文件写交 LLM 审查；空命令、动态命令名、参数缺失等兜底放行交由沙箱；提权、自毁、凭据外传、文件系统根与系统/凭据关键路径的变更/删除、家目录根删除硬拒绝；家目录根变更与 DSH_HOME 的变更/删除走工作区外通用路径（沙箱 + escalation） |
-| L1 LLM 安全审批 | allow / deny | 沙箱不拦截但语义危险的操作（未识别工具、模糊 shell、敏感路径读、动态目标、块设备、持久终端、git 状态变更、网络/数据库操作、工作区内受保护路径写）交 LLM 两态裁决：用户明确授权的操作放行，减少人工批准。分类器输入先脱敏再标签隔离（`<untrusted>` 数据 vs `<user-authority>` 授权），并内置注入防御；用户用短指代（如「A」）回应 AI 方案列表时，AI 提议作为 `<proposal-context>` 仅用于消解指代、不作授权；agent 指令文件（AGENTS.md / CLAUDE.md / .dsh 等）按常规配置归类，用户明确授权即可编辑 |
+| L0 确定性规则 | allow / deny | 零成本、零 LLM：只读、会话状态、工作区内编辑与删除、build/test、run_code 容器直接放行；工作区外普通路径读直接放行；工作区外的写/删除（敏感 shell/凭据配置文件写除外）放行交由 workspace-write 沙箱拦截 + escalation 弹窗；工作区外敏感配置文件写交 LLM 审查；空命令、动态命令名、参数缺失等兜底放行交由沙箱；提权、系统级自毁（关机/重启/格式化；进程杀手 killall/pkill/taskkill/Stop-Process 降级 L1）、凭据外传、文件系统根与系统/凭据关键路径（/usr/local 除外）的变更/删除、家目录根删除硬拒绝；家目录根变更、DSH_HOME 与 /usr/local 的变更/删除走工作区外通用路径（沙箱 + escalation） |
+| L1 LLM 安全审批 | allow / deny | 沙箱不拦截但语义危险的操作（未识别工具、模糊 shell、敏感路径读、动态目标、块设备、持久终端、git 状态变更、网络/数据库操作、进程管理（killall/pkill/taskkill/Stop-Process）、工作区内受保护路径写）交 LLM 两态裁决：用户明确授权的操作放行，减少人工批准。分类器输入先脱敏再标签隔离（`<untrusted>` 数据 vs `<user-authority>` 授权），并内置注入防御；用户用短指代（如「A」）回应 AI 方案列表时，AI 提议作为 `<proposal-context>` 仅用于消解指代、不作授权；agent 指令文件（AGENTS.md / CLAUDE.md / .dsh 等）按常规配置归类，用户明确授权即可编辑 |
 | L2 人工审批 | ask | 审批弹窗前先过 LLM 预审：合理则直接批准不弹窗，危险/不确定才人工兜底。覆盖三类审批请求：① AI 用 ask_user_question 问用户确认操作合法，确认后重新执行再过 LLM；② AI 用 sandbox_permissions + justification 重试走 DSH 沙箱提权（escalation）；③ 工具/插件自身声明需要审批（pre-execute 返回 ask）的调用 |
 
 <p align="center">
@@ -147,7 +147,11 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 - 删除工作区内文件直接放行，依赖 workspace-write 沙箱兜底；不做会话产物 artifact 追踪，工作区外的删除同样放行交由沙箱拦截 + escalation。
 - 分类器默认复用当前会话模型；若会话使用第三方 provider，分类请求会发往该 provider（已脱敏、限界）。
 - `preflight` 开关默认 `false`：普通工具调用完全依赖 workspace-write 沙箱，默认只跑硬 deny guard 与 escalation 预审；设 `preflight: true` 才会对每次调用加确定性规则 + LLM 分类。
-- 凭据外传检测是浅层文本模式（无法识别 base64 编码或分段的凭据）；把它当作绊线，而非保证。
+- 凭据外传检测按「命令位置」识别网络命令：外发私钥 / 云凭据等敏感文件引用（`.ssh/`、`id_rsa`、`.credentials.yaml` 等）无条件硬 deny（含回环目标）；PASSWORD / TOKEN / *KEY 等文本标记仅在外部目标时硬 deny，全部 URL 目标为本机回环地址（localhost 及其子域、127/8、`[::1]`、`0.0.0.0`）时豁免、交 L1 语义审查（如本机登录 API 测试），目标不可判定（变量展开 / 无 URL）时 fail-closed 拒绝。仍无法识别 base64 编码或分段的凭据；把它当作绊线，而非保证。
+- heredoc 正文中的命令行仍按命令段处理：用 bash heredoc 写入含网络命令与敏感字样的脚本文件可能被误拦（建议改用 write 工具写文件）。
+- 工具级凭据外发检测（web_fetch/web_search/curl/wget 前缀工具与外部写工具）按「真实凭据形态」判定：Bearer 值长度 >= 20 且含数字或符号、sk-/ghp-/github_pat/xox* 前缀 token >= 12 字符且含数字；query/body 等自然语言字段里「Bearer + 英文单词」不再误拦。纯字母长 token 可能漏检（交 L1 语义审查与沙箱兜底）。
+- 进程杀手（killall/pkill/taskkill/Stop-Process）已降级 L1：L1 误判放行杀掉宿主进程的后果是会话崩溃（可恢复，非不可逆破坏），且 kill <pid> 与复合写法本就交 L1，全量 L0 的边际防护有限；系统级破坏（关机/重启/格式化）仍硬 deny。
+- /usr/local 从系统关键路径豁免，走「沙箱拦截 + escalation 人工审批」通道（与家目录根变更同模式）：PATH 前置的 /usr/local/bin 覆盖是持久化劫持向量，由 escalation 弹窗人工对冲；/usr 本体与 /etc 等仍硬 deny。
 - 分类器的注入防御是提示词级软约束（脱敏 + 标签隔离 + anti-injection），对抗性注入仍可能诱导误判；危险操作的最终拦截依赖 L0 硬 deny 与 workspace-write 沙箱。
 
 ## License

@@ -121,9 +121,12 @@ export function isCriticalPath(target: string, roots: PolicyRoots): boolean {
   // 以真实落点判定，与 realpath 后的根保持一致（symlink 逃逸不绕过）。
   const real = roots.resolveReal(normalized)
   const windowsCritical = /^[a-z]:\\(?:windows|program files|program files \(x86\)|programdata)(?:\\|$)/i.test(real)
+  // /usr/local 是 FHS 的本地管理员软件区（Intel Mac Homebrew 等安装位置），非系统完整性路径：
+  // 从 /usr 关键路径中排除，走「沙箱拦截 + escalation 审批」通用通道（与家目录根变更同模式）。
+  const withinUsrLocal = isWithin(normalizePath('/usr/local', '/', '/'), real)
   const credentialRoots = CREDENTIAL_DIRS.map(dir => normalizePath(dir, roots.home, roots.home))
   const critical = windowsCritical
-    || SYSTEM_DIRS.some(root => isWithin(normalizePath(root, '/', '/'), real))
+    || (!withinUsrLocal && SYSTEM_DIRS.some(root => isWithin(normalizePath(root, '/', '/'), real)))
     || credentialRoots.some(root => isWithin(root, real))
   return critical
 }

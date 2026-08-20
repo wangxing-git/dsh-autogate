@@ -135,11 +135,11 @@ describe('assessTool 外部写工具与破坏性工具名', () => {
 
 describe('hardDenyReason 凭据外传与关键路径写', () => {
   it('外发调用携带 Bearer 凭据硬拒绝', () => {
-    const reason = hardDenyReason(execution('web_search', { query: 'x', headers: { Authorization: 'Bearer abcdefghijklmnop' } }), roots)
+    const reason = hardDenyReason(execution('web_search', { query: 'x', headers: { Authorization: 'Bearer abcdefghijkl1234567890' } }), roots)
     expect(reason).toContain('credential')
   })
   it('外部写工具携带 token 硬拒绝', () => {
-    expect(hardDenyReason(execution('git_push', { token: 'ghp_abcdefghijklmnopqrst' }), roots)).toContain('credential')
+    expect(hardDenyReason(execution('git_push', { token: 'ghp_16C7e42F292c6912E7710c838347' }), roots)).toContain('credential')
   })
   it('破坏性工具名命中关键路径硬拒绝', () => {
     expect(hardDenyReason(execution('delete_file', { file_path: '/etc/passwd' }), roots)).toContain('destructive tool targets')
@@ -163,7 +163,7 @@ describe('hardDenyReason 凭据外传与关键路径写', () => {
   })
   it('破坏性工具与凭据外传的拒绝附带不可提权指引', () => {
     expect(hardDenyReason(execution('delete_file', { file_path: '/etc/passwd' }), roots)).toContain('cannot be escalated')
-    expect(hardDenyReason(execution('web_search', { query: 'x', headers: { Authorization: 'Bearer abcdefghijklmnop' } }), roots)).toContain('cannot be escalated')
+    expect(hardDenyReason(execution('web_search', { query: 'x', headers: { Authorization: 'Bearer abcdefghijkl1234567890' } }), roots)).toContain('cannot be escalated')
   })
   it('无凭据外发不拒绝', () => {
     expect(hardDenyReason(execution('web_search', { query: 'hello' }), roots)).toBeUndefined()
@@ -172,6 +172,37 @@ describe('hardDenyReason 凭据外传与关键路径写', () => {
     const exec = execution('web_search', { n: 1n })
     expect(() => hardDenyReason(exec, roots)).not.toThrow()
     expect(hardDenyReason(exec, roots)).toBeUndefined()
+  })
+})
+
+describe('hardDenyReason 凭据检测形态收紧', () => {
+  it('自然语言中的 Bearer / token 前缀措辞不误判为凭据', () => {
+    expect(hardDenyReason(execution('web_search', { query: 'how does Bearer authentication work' }), roots)).toBeUndefined()
+    expect(hardDenyReason(execution('web_search', { query: 'Bearer authorization header format' }), roots)).toBeUndefined()
+    expect(hardDenyReason(execution('web_search', { query: 'sk-anything tutorial for beginners' }), roots)).toBeUndefined()
+    expect(hardDenyReason(execution('web_search', { query: 'ghp_tutorialtoken usage example' }), roots)).toBeUndefined()
+    expect(hardDenyReason(execution('send_email', { to: 'a@b.c', subject: 'api', body: 'please use Bearer authentication headers when calling' }), roots)).toBeUndefined()
+    expect(hardDenyReason(execution('create_pull_request', { title: 'docs', body: 'add Bearer authorization guide' }), roots)).toBeUndefined()
+  })
+  it('真实凭据形态仍硬拒绝', () => {
+    expect(hardDenyReason(execution('web_fetch', { url: 'https://api.x.com/me', headers: { authorization: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N' } }), roots)).toContain('credential')
+    expect(hardDenyReason(execution('curl', { url: 'https://api.openai.com/v1/chat', headers: { authorization: 'Bearer sk-proj-4tAbC123defGHI456klmNOP789qrs' } }), roots)).toContain('credential')
+    expect(hardDenyReason(execution('web_fetch', { url: 'https://x.com', headers: { authorization: 'Bearer a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6' } }), roots)).toContain('credential')
+    expect(hardDenyReason(execution('git_push', { token: 'ghp_16C7e42F292c6912E7710c838347Ae178B4a' }), roots)).toContain('credential')
+  })
+  it('纯字母长 Bearer 串不视为凭据（需含数字或符号）', () => {
+    expect(hardDenyReason(execution('web_search', { query: 'x', headers: { Authorization: 'Bearer abcdefghijklmnopqrstuv' } }), roots)).toBeUndefined()
+  })
+})
+
+describe('hardDenyReason /usr/local 走沙箱与 escalation', () => {
+  it('write /usr/local 不再硬 deny，交沙箱兜底', () => {
+    expect(hardDenyReason(execution('write', { file_path: '/usr/local/etc/x.conf', content: 'x' }), roots)).toBeUndefined()
+    expect(assessTool(execution('write', { file_path: '/usr/local/etc/x.conf', content: 'x' }), roots).decision).toBe('allow')
+  })
+  it('破坏性工具指向 /usr/local 不再硬 deny，交 LLM 分类', () => {
+    expect(hardDenyReason(execution('delete_file', { file_path: '/usr/local/bin/tool' }), roots)).toBeUndefined()
+    expect(assessTool(execution('delete_file', { file_path: '/usr/local/bin/tool' }), roots).decision).toBe('ask')
   })
 })
 
