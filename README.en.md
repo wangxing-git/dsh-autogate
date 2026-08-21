@@ -93,7 +93,7 @@ While the plugin is active, a floating **Approval trail** toggle appears in the 
 
 - The toggle shows the current record count, a decision-colored dot for the latest record, and allow/deny/ask counts; it expands/collapses the panel.
 - The panel lists the **most recent 50 records** (the trail itself is a process-level ring buffer capped at 200; the panel shows the newest window).
-- The panel is **scoped to the current session**: it shows only records produced by the currently selected session (subagent calls are attributed to their top-level parent session); a scope toggle temporarily switches to **All sessions**, and with no session selected it shows all records (the toggle is transient and resets to current-session scoping after a reload).
+- The panel is **scoped to the current session**: it shows records produced by the currently selected session — the top-level session window shows all approvals it authorized (including those triggered by its subagents), and a subagent session window also shows the approvals it executed; a scope toggle temporarily switches to **All sessions**, and with no session selected it shows all records (the toggle is transient and resets to current-session scoping after a reload).
 - Each entry shows the decision as a colored badge (green = allow, red = deny, orange = ask), a layer badge (`L0` deterministic / `L1` LLM / `L2` human), the tool name (monospace), and the local time; the collapsed state still previews the one-line operation summary.
 - Expanding an entry reveals the one-line operation summary, the deny/allow reason, the tool `callId`, the local time, and the decision duration.
 - The **Locate (定位)** button scrolls the session view to the corresponding tool call.

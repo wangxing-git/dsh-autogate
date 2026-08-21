@@ -470,7 +470,7 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
     expect((byA as any).value[0].sessionId).toBe('sess-a')
   })
 
-  it('子代理工具调用的轨迹归到顶层父会话（按父会话 id 可查，按子会话 id 查不到）', async () => {
+  it('子代理工具调用的轨迹同时记录授权会话与执行会话（父会话 id 与子会话 id 均可查）', async () => {
     const parent = {
       session: {
         events: [{ type: 'permission/preset', data: { preset: 'auto-ask' } }],
@@ -493,10 +493,11 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
     const handler = rpcHandlers.get('/autogate')!
     const byParent = await handler('trail', { sessionId: 'sess-parent' }, undefined as any)
     expect((byParent as any).value).toHaveLength(1)
-    expect((byParent as any).value[0]).toMatchObject({ callId: 'call-child', sessionId: 'sess-parent' })
+    expect((byParent as any).value[0]).toMatchObject({ callId: 'call-child', sessionId: 'sess-parent', execSessionId: 'sess-child' })
 
     const byChild = await handler('trail', { sessionId: 'sess-child' }, undefined as any)
-    expect((byChild as any).value).toHaveLength(0)
+    expect((byChild as any).value).toHaveLength(1)
+    expect((byChild as any).value[0]).toMatchObject({ callId: 'call-child', sessionId: 'sess-parent', execSessionId: 'sess-child' })
   })
 
   it('RPC 未知端点返回 internal 错误', async () => {

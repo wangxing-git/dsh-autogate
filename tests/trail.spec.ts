@@ -52,6 +52,17 @@ describe('createApprovalTrail', () => {
     expect(snapshot[1].sessionId).toBe('')
   })
 
+  it('记录 execSessionId（执行会话）供按执行会话查询；缺省时为空字符串', () => {
+    const trail = createApprovalTrail()
+    trail.record({ callId: 'a', toolName: 'bash', summary: 'ls', decision: 'allow', layer: 'L0', reason: '只读', durationMs: 1, sessionId: 'sess-parent', execSessionId: 'sess-child' })
+    trail.record({ callId: 'b', toolName: 'read', summary: '/ws/x.ts', decision: 'deny', layer: 'L1', reason: '危险', durationMs: 250, sessionId: 'sess-parent' })
+    const snapshot = trail.snapshot()
+    expect(snapshot[0].sessionId).toBe('sess-parent')
+    expect(snapshot[0].execSessionId).toBe('sess-child')
+    expect(snapshot[1].sessionId).toBe('sess-parent')
+    expect(snapshot[1].execSessionId).toBe('')
+  })
+
   it('记录携带发送给审查 LLM 的输入（classifierInput）；缺省时无该字段', () => {
     const trail = createApprovalTrail()
     trail.record({ callId: 'a', toolName: 'bash', summary: 'ls', decision: 'deny', layer: 'L1', reason: '危险', durationMs: 1, classifierInput: { toolName: 'bash', arguments: { command: 'rm -rf /tmp/x' }, workspaceRoot: '/ws', policyReason: '敏感路径', trustedUserMessages: ['<user-authority>允许清理</user-authority>'] } })

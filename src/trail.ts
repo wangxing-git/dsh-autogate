@@ -26,6 +26,8 @@ export interface ApprovalRecord {
   reason: string
   /** 产生该决策的会话 id（顶层授权会话；子代理调用归属其父会话），无会话上下文时为空字符串。 */
   sessionId: string
+  /** 实际执行该工具调用的会话 id（子代理调用为子会话 id，主代理调用与 sessionId 相同），无会话上下文时为空字符串。 */
+  execSessionId: string
   /** 发送给审查 LLM 的输入（已脱敏、不含系统提示词）；仅 L1/L2 记录携带，L0 无。 */
   classifierInput?: ClassifierInput
   /** 审查 LLM 调用的 token 消耗（缓存输入 / 未缓存输入 / 输出）；仅 L1/L2 且能取得 usage 时携带。 */
@@ -35,7 +37,7 @@ export interface ApprovalRecord {
 /** 审批轨迹：进程级环形缓冲，只增不持久化（重启即清空）。 */
 export interface ApprovalTrail {
   /** 追加一条记录；sessionId 缺省时记为空字符串（兼容无会话上下文的调用）。 */
-  record(entry: Omit<ApprovalRecord, 'seq' | 'time' | 'sessionId'> & { sessionId?: string }): void
+  record(entry: Omit<ApprovalRecord, 'seq' | 'time' | 'sessionId' | 'execSessionId'> & { sessionId?: string; execSessionId?: string }): void
   /** 返回当前全部记录的副本（按时间顺序）。 */
   snapshot(): ApprovalRecord[]
 }
@@ -46,7 +48,7 @@ export function createApprovalTrail(limit = 200): ApprovalTrail {
   let seq = 0
   return {
     record(entry) {
-      records.push({ seq: seq++, time: Date.now(), sessionId: '', ...entry })
+      records.push({ seq: seq++, time: Date.now(), sessionId: '', execSessionId: '', ...entry })
       if (records.length > limit) records.splice(0, records.length - limit)
     },
     snapshot() {
