@@ -114,6 +114,12 @@ describe('CLASSIFIER_SYSTEM_PROMPT 场景覆盖', () => {
     // 子代理即触发（不再要求 escalation reason）；非 escalation 审批同样走终审、无人工兜底。
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('For a non-escalation approval request from a subagent, apply the same final-decision logic with no human fallback')
   })
+  it('覆盖目标以命令逐字内容为准（防 proposal-context 扩大/抄错目标）', () => {
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('CONCRETE target')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('verbatim')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('do NOT widen it to other listed targets')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('do NOT copy a nearby name')
+  })
 })
 
 describe('createDshClassifier 审查提示词', () => {
