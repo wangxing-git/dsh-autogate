@@ -89,6 +89,8 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
       # 独立 OpenAI 兼容分类端点（可选；必须 HTTPS，loopback 可用 http）
       # classifierEndpoint: https://api.example.com/v1/chat/completions
       # classifierApiKeyEnv: DEEPSEEK_API_KEY   # HTTP 端点 API Key 的环境变量名
+      # classifierHttpDisableReasoning: true    # HTTP 分类请求显式关闭思考模式（reasoning_effort=none，默认开启）；
+      #                                         # OpenAI 官方端点支持；不认识的兼容端点（如 DeepSeek 官方 API）报 400 时设为 false
       # workspaceRoot: /path/to/ws              # 覆盖工作区根目录（默认会话 cwd）
       # tempRoots: [/tmp]                       # 信任的临时目录（默认系统临时目录）
 

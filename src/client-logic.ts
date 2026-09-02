@@ -1,5 +1,42 @@
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import Schema from '@deepseek-ai/schemastery'
+
+/**
+ * 快照 store（zustand 迷你版）：rc 时代的 @deepseek-ai/dsh-client-runtime/client
+ * 提供 createSnapshotStore，alpha 时代该包停更且 API 移除。宿主通过 React
+ * useSyncExternalStore 消费，要求 getSnapshot 返回引用稳定的不可变快照。
+ */
+export interface SnapshotStore<T> {
+  getSnapshot(): T
+  subscribe(listener: () => void): () => void
+  /** 全量替换快照（下一次 getSnapshot 返回新引用）。 */
+  set(value: T): void
+  /** 基于不可变副本的声明式修改：拷贝 → 原地 mutate → 替换，保证引用变化。 */
+  update(mutator: (draft: T) => void): void
+}
+
+/** 创建快照 store（数据为 JSON 兼容形状时 structuredClone 足够，无需 immer）。 */
+export function createSnapshotStore<T>(init: T): SnapshotStore<T> {
+  let state: T = init
+  const listeners = new Set<() => void>()
+  const notify = (): void => { for (const listener of [...listeners]) listener() }
+  return {
+    getSnapshot: () => state,
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    set(value) {
+      state = value
+      notify()
+    },
+    update(mutator) {
+      const draft = structuredClone(state) as T
+      mutator(draft)
+      state = draft
+      notify()
+    },
+  }
+}
 
 /** autogate 的 settings 命名空间（与服务端 settingsNamespace('autogate') 一致）。 */
 export const SETTINGS_NS = 'autogate'
@@ -238,14 +275,13 @@ export class ApiSettingsSource {
       return
     }
     try {
-      const response = await this.api.describe({})
-      const result = response?.result
-      if (result?.ok !== true || !Array.isArray(result.value?.namespaces)) {
+      const response = await this.api.describe()
+      if (response?.ok !== true || !Array.isArray(response.value?.namespaces)) {
         this.store.set({ status: 'unavailable', writable: false, value: {}, user: {}, inherited: {}, revision: undefined })
         return
       }
-      const writable = result.value.writable === true
-      const view = result.value.namespaces.find((candidate: any) => String(candidate.ns) === this.namespace)
+      const writable = response.value.writable === true
+      const view = response.value.namespaces.find((candidate: any) => String(candidate.ns) === this.namespace)
       if (view === undefined) {
         // 该 namespace 未对客户端暴露：标记 unavailable（保留 writable，与官方 settingsScope 一致）。
         this.store.set({ status: 'unavailable', writable, value: {}, user: {}, inherited: {}, revision: undefined })
@@ -301,17 +337,13 @@ export class ApiSettingsSource {
     if (ops.length === 0) return { ok: true, message: '' }
     try {
       const revision = this.getSnapshot().revision
-      const response = await this.api.mutate({
-        ns: this.namespace,
-        ops,
-        ...(revision === undefined ? {} : { expectedRevision: revision }),
-      })
-      if (response?.result?.ok === true) {
+      const response = await this.api.mutate(this.namespace, ops, revision)
+      if (response?.ok === true) {
         await this.refresh()
         return { ok: true, message: '' }
       }
       // 提取服务端拒绝原因（settings-rejected / settings-conflict 的 message 即 validateConfig 的约束文本）。
-      const error = (response?.result as any)?.error
+      const error = response?.error
       // 写失败（如 revision 冲突）后刷新快照恢复最新 revision，避免本地停留在过期版本导致后续保存持续被拒。
       await this.refresh()
       return { ok: false, message: error?.message ?? '保存被拒绝' }
@@ -472,6 +504,8 @@ export const zh = {
   classifierMaxOutputTokensHint: '64–4096',
   classifierRetry: '解析失败重试',
   classifierRetryHint: '分类器输出解析失败时静默重试一次（默认开启）',
+  classifierHttpDisableReasoning: 'HTTP 端点关闭思考',
+  classifierHttpDisableReasoningHint: 'HTTP 分类请求携带 reasoning_effort=none 显式关闭思考模式（OpenAI 官方端点支持）；端点不支持该参数报 400 时关闭此开关（默认开启）',
   proposalContextMaxMessageLen: '指代消息长度阈值',
   proposalContextMaxMessageLenHint: '长度不超过该值（字符）的用户消息才携带 AI 提议上下文用于消解指代；默认 10',
   proposalContextMaxChars: '单条上下文上限',
@@ -534,6 +568,8 @@ export const en = {
   classifierMaxOutputTokensHint: '64–4096',
   classifierRetry: 'Retry on parse failure',
   classifierRetryHint: 'Retry once when classifier output fails to parse (default on)',
+  classifierHttpDisableReasoning: 'Disable reasoning (HTTP)',
+  classifierHttpDisableReasoningHint: 'Send reasoning_effort=none to explicitly disable thinking on the HTTP classifier endpoint (supported by OpenAI); turn off when the endpoint rejects the parameter with 400 (default on)',
   proposalContextMaxMessageLen: 'Reference message max length',
   proposalContextMaxMessageLenHint: 'Only user messages up to this length (chars) carry the AI proposal context for reference resolution; default 10',
   proposalContextMaxChars: 'Per-context max chars',

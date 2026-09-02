@@ -344,6 +344,22 @@ describe('createHttpClassifier HTTP 端点', () => {
     const headers = (fetchMock.mock.calls[0][1] as any).headers
     expect(headers.authorization).toBe('Bearer k')
   })
+  it('默认携带 reasoning_effort: none 显式关闭思考模式', async () => {
+    const fetchMock = vi.fn(async () => okResponse({ choices: [{ message: { content: '{"decision":"allow","reason":"ok"}' } }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const classifier = createHttpClassifier({ endpoint: 'https://api.example.com/v1/chat/completions', model: 'm', timeoutMs: 1000 })
+    await classifier.classify(input as any, new AbortController().signal)
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as any).body))
+    expect(body.reasoning_effort).toBe('none')
+  })
+  it('disableReasoning: false 时不发送 reasoning_effort（兼容不认识的 OpenAI 兼容端点）', async () => {
+    const fetchMock = vi.fn(async () => okResponse({ choices: [{ message: { content: '{"decision":"allow","reason":"ok"}' } }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const classifier = createHttpClassifier({ endpoint: 'https://api.example.com/v1/chat/completions', model: 'm', disableReasoning: false, timeoutMs: 1000 })
+    await classifier.classify(input as any, new AbortController().signal)
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as any).body))
+    expect(Object.hasOwn(body, 'reasoning_effort')).toBe(false)
+  })
   it('非 200 响应抛错', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('err', { status: 500 })))
     const classifier = createHttpClassifier({ endpoint: 'https://api.example.com/v1/chat/completions', model: 'm', timeoutMs: 1000 })

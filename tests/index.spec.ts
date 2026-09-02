@@ -61,7 +61,7 @@ function createMockContext(chunks: any[] | null, agentsMap?: Map<string, unknown
 function autoAgent() {
   return {
     session: {
-      events: [{ type: 'permission/preset', data: { preset: 'auto-ask' } }],
+      snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }],
       header: { cwd: '/ws', id: 'sess-auto' },
     },
     options: { provider: 'deepseek', model: 'deepseek-chat' },
@@ -72,7 +72,7 @@ function autoAgent() {
 function agentWithPreset(preset: string, id = 'sess-preset') {
   return {
     session: {
-      events: [{ type: 'permission/preset', data: { preset } }],
+      snapshotEvents: () => [{ type: 'permission/preset', data: { preset } }],
       header: { cwd: '/ws', id },
     },
     options: { provider: 'deepseek', model: 'deepseek-chat' },
@@ -151,7 +151,7 @@ describe('apply 注册的 escalation answerer（approval/request）', () => {
     const answerer = listeners.get('approval/request')![0]
     const noRouteAgent = {
       session: {
-        events: [{ type: 'permission/preset', data: { preset: 'auto' } }],
+        snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto' } }],
         header: { cwd: '/ws' },
       },
     }
@@ -234,7 +234,7 @@ describe('apply 注册的 escalation answerer（approval/request）', () => {
     // 构造含 ask_user_question 问答对事件的 agent（用户在问答中授权写入全局 .gitconfig）。
     const agent = {
       session: {
-        events: [
+        snapshotEvents: () => [
           { type: 'permission/preset', data: { preset: 'auto-ask' } },
           { type: 'tool/call', data: { callId: 'ask-esc', name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ id: 'q1', question: '是否允许写入全局 .gitconfig 配置假邮箱' }] }) } },
           { type: 'tool/result', data: { message: { source: { kind: 'tool', callId: 'ask-esc' }, content: [{ type: 'tool-result', toolCallId: 'ask-esc', content: [{ type: 'text', text: JSON.stringify({ answers: [{ id: 'q1', selected: ['允许'] }] }) }] }] } } },
@@ -330,7 +330,7 @@ describe('apply 注册的工具 ask answerer（approval/request，非 escalation
     // 构造带 tool/call 事件的 agent：工具调用已落盘，但本插件 pre-execute 未缓存参数（被更早注册的监听器短路）。
     const agent = {
       session: {
-        events: [
+        snapshotEvents: () => [
           { type: 'permission/preset', data: { preset: 'auto-ask' } },
           { type: 'tool/call', data: { callId: 'call-ask-from-events', name: 'write', arguments: JSON.stringify({ file_path: '/ws/from-events.txt', content: 'hello' }) } },
         ],
@@ -431,7 +431,7 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
     const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
     const agent = {
       session: {
-        events: [
+        snapshotEvents: () => [
           { type: 'permission/preset', data: { preset: 'auto-ask' } },
           { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '允许清理 /tmp' }] } },
         ],
@@ -473,14 +473,14 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
   it('子代理工具调用的轨迹同时记录授权会话与执行会话（父会话 id 与子会话 id 均可查）', async () => {
     const parent = {
       session: {
-        events: [{ type: 'permission/preset', data: { preset: 'auto-ask' } }],
+        snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }],
         header: { cwd: '/ws', id: 'sess-parent', origin: 'primary' },
       },
       options: { provider: 'deepseek', model: 'deepseek-chat' },
     }
     const child = {
       session: {
-        events: [],
+        snapshotEvents: () => [],
         header: { cwd: '/ws', id: 'sess-child', origin: 'subagent', parentSession: 'sess-parent' },
       },
       options: { provider: 'deepseek', model: 'deepseek-chat' },
@@ -568,34 +568,34 @@ describe('autoPermissionAuthority 与 isAutoPermissionExecution', () => {
   const neverEvents = () => [{ type: 'permission/preset', data: { preset: 'never' } }]
 
   it('isAutoPermissionExecution 识别 Auto 预设', () => {
-    const exec = { agent: { session: { events: autoEvents() } } }
+    const exec = { agent: { session: { snapshotEvents: () => autoEvents() } } }
     expect(isAutoPermissionExecution(exec as any)).toBe(true)
   })
   it('isAutoPermissionExecution 拒绝非 Auto / 空 events / 无 agent', () => {
-    expect(isAutoPermissionExecution({ agent: { session: { events: neverEvents() } } } as any)).toBe(false)
-    expect(isAutoPermissionExecution({ agent: { session: { events: [] } } } as any)).toBe(false)
+    expect(isAutoPermissionExecution({ agent: { session: { snapshotEvents: () => neverEvents() } } } as any)).toBe(false)
+    expect(isAutoPermissionExecution({ agent: { session: { snapshotEvents: () => [] } } } as any)).toBe(false)
     expect(isAutoPermissionExecution({} as any)).toBe(false)
   })
   it('顶层 Auto 会话直接返回自身 agent', () => {
-    const agent = { session: { events: autoEvents(), header: { origin: 'primary', cwd: '/ws' } } }
+    const agent = { session: { snapshotEvents: () => autoEvents(), header: { origin: 'primary', cwd: '/ws' } } }
     const exec = { name: 'bash', arguments: {}, agent }
     expect(autoPermissionAuthority(exec as any, () => undefined)).toBe(agent)
   })
   it('subagent 沿 parentSession 链继承 Auto', () => {
-    const parent = { session: { events: autoEvents(), header: { origin: 'primary', cwd: '/ws' } } }
-    const child = { session: { events: neverEvents(), header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
+    const parent = { session: { snapshotEvents: () => autoEvents(), header: { origin: 'primary', cwd: '/ws' } } }
+    const child = { session: { snapshotEvents: () => neverEvents(), header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
     const lookup = (id: unknown) => (id === 'p1' ? parent : undefined)
     const exec = { name: 'bash', arguments: {}, agent: child }
     expect(autoPermissionAuthority(exec as any, lookup)).toBe(parent)
   })
   it('parent 缺失返回 undefined', () => {
-    const child = { session: { events: neverEvents(), header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
+    const child = { session: { snapshotEvents: () => neverEvents(), header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
     const exec = { name: 'bash', arguments: {}, agent: child }
     expect(autoPermissionAuthority(exec as any, () => undefined)).toBeUndefined()
   })
   it('循环 parentSession 返回 undefined', () => {
-    const a = { session: { events: neverEvents(), header: { origin: 'subagent', parentSession: 'b' } } }
-    const b = { session: { events: neverEvents(), header: { origin: 'subagent', parentSession: 'a' } } }
+    const a = { session: { snapshotEvents: () => neverEvents(), header: { origin: 'subagent', parentSession: 'b' } } }
+    const b = { session: { snapshotEvents: () => neverEvents(), header: { origin: 'subagent', parentSession: 'a' } } }
     const lookup = (id: unknown) => (id === 'a' ? a : id === 'b' ? b : undefined)
     const exec = { name: 'bash', arguments: {}, agent: a }
     expect(autoPermissionAuthority(exec as any, lookup)).toBeUndefined()
@@ -607,7 +607,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
   const userMessage = (text: string) => ({ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text }] } })
   function agentWithEvents(events: unknown[]) {
     return {
-      session: { events, header: { cwd: '/ws' } },
+      session: { snapshotEvents: () => events, header: { cwd: '/ws' } },
       options: { provider: 'deepseek', model: 'deepseek-chat' },
     }
   }
@@ -978,20 +978,20 @@ describe('全自动模式（auto）：escalation 审批不人工兜底', () => {
 
 describe('managedPermissionAuthority', () => {
   it('识别半自动（auto-ask）预设', () => {
-    const agent = { session: { events: [{ type: 'permission/preset', data: { preset: 'auto-ask' } }] } }
+    const agent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }] } }
     expect(managedPermissionAuthority(agent as any, () => undefined)).toEqual({ agent, mode: 'semi-auto' })
   })
   it('识别全自动（auto）预设', () => {
-    const agent = { session: { events: [{ type: 'permission/preset', data: { preset: 'auto' } }] } }
+    const agent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto' } }] } }
     expect(managedPermissionAuthority(agent as any, () => undefined)).toEqual({ agent, mode: 'full-auto' })
   })
   it('未命中（read-only）返回 undefined', () => {
-    const agent = { session: { events: [{ type: 'permission/preset', data: { preset: 'read-only' } }] } }
+    const agent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'read-only' } }] } }
     expect(managedPermissionAuthority(agent as any, () => undefined)).toBeUndefined()
   })
   it('subagent 沿 parentSession 链继承全自动模式', () => {
-    const parent = { session: { events: [{ type: 'permission/preset', data: { preset: 'auto' } }], header: { origin: 'primary' } } }
-    const child = { session: { events: [], header: { origin: 'subagent', parentSession: 'p1' } } }
+    const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto' } }], header: { origin: 'primary' } } }
+    const child = { session: { snapshotEvents: () => [], header: { origin: 'subagent', parentSession: 'p1' } } }
     const lookup = (id: unknown) => (id === 'p1' ? parent : undefined)
     expect(managedPermissionAuthority(child as any, lookup as any)).toEqual({ agent: parent, mode: 'full-auto' })
   })
@@ -1013,7 +1013,7 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
   }
 
   it('Auto 父会话的子代理 → 放开为 ask', () => {
-    const parent = { session: { events: [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
+    const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
     const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
     apply(ctx as any)
     const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
@@ -1032,7 +1032,7 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
   })
 
   it('非 Auto 父会话的子代理 → 不放开', () => {
-    const parent = { session: { events: [{ type: 'permission/preset', data: { preset: 'read-only' } }], header: { origin: 'primary' } } }
+    const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'read-only' } }], header: { origin: 'primary' } } }
     const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
     apply(ctx as any)
     const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
@@ -1051,8 +1051,8 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
   })
 
   it('孙代理（父自身也是 subagent）沿 parentSession 链找到顶层 Auto 祖先 → 放开为 ask', () => {
-    const top = { session: { events: [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
-    const middle = { session: { events: [], header: { origin: 'subagent', parentSession: 'sess-top' } } }
+    const top = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
+    const middle = { session: { snapshotEvents: () => [], header: { origin: 'subagent', parentSession: 'sess-top' } } }
     const agentsMap = new Map([['sess-top', top], ['sess-middle', middle]])
     const { ctx, listeners } = createMockContext(allowChunks, agentsMap)
     apply(ctx as any)
@@ -1063,14 +1063,14 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
   })
 
   it('子代理 session 初始已含 delegation 的 never，放开后 ask 后写覆盖（never 后跟 ask）', () => {
-    const parent = { session: { events: [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
+    const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
     const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
     apply(ctx as any)
     const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
     const events: any[] = [{ type: 'approval/policy', data: { policy: 'never', source: 'delegation' } }]
     const session = {
       header: { origin: 'subagent', parentSession: 'sess-parent' },
-      events,
+      snapshotEvents: () => events,
       append: (type: string, data: unknown) => { events.push({ type, data }) },
     }
     listener(session)
@@ -1080,7 +1080,7 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
 
 describe('子代理提权 LLM 终审（不转人工弹窗）', () => {
   const subagentChild = () => ({
-    session: { events: [], header: { cwd: '/ws', id: 'sess-child', origin: 'subagent', parentSession: 'sess-auto' } },
+    session: { snapshotEvents: () => [], header: { cwd: '/ws', id: 'sess-child', origin: 'subagent', parentSession: 'sess-auto' } },
     options: { provider: 'deepseek', model: 'deepseek-chat' },
   })
 
@@ -1179,9 +1179,11 @@ function createLocaleContext() {
   const mountSettings = () => {
     const sctx = {
       settings: {
-        register(_ns: unknown, _schema: unknown, opts: any) {
-          opts.validate?.({})
-          const resolved = { ...(opts.base ?? {}) }
+        installSection(_owner: unknown, _ns: unknown, _schema: unknown, entry: unknown, hooks: any) {
+          hooks.validate?.({ ...(entry ?? {}) })
+          const resolved = { ...(entry ?? {}) }
+          hooks.setSource(() => resolved)
+          hooks.onChange()
           return { get: () => resolved, watch() { return () => {} }, update: async () => {}, replace: async () => {} }
         },
         get(ns: unknown) {

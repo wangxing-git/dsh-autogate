@@ -113,8 +113,10 @@ export function hardDenyShellReason(source: string, _shell: ShellKind, _roots: P
   if (containsCommand(compact, SELF_DESTRUCTIVE_COMMANDS)) return reasonText(locale, '不允许自毁或系统级命令', 'self-destructive or system-level command is not permitted') + noEscalationHint(locale)
   const exfiltration = exfiltrationReason(compact, locale)
   if (exfiltration !== undefined) return exfiltration
-  if (/rm\s+(?:-[a-z]*[fr][a-z]*\s+)*\/(?:\s|$)/.test(compact)) return reasonText(locale, '不允许删除文件系统根', 'deleting the filesystem root is not permitted') + noEscalationHint(locale)
-  if (/(?:rm|Remove-Item)\s+(?:-[a-z]*[fr][a-z]*\s+)*(?:~|\$HOME|\$env:HOME)(?:\s|$)/i.test(compact)) return reasonText(locale, '不允许删除用户家目录', 'deleting the user home root is not permitted') + noEscalationHint(locale)
+  // \b 词边界：rm 必须是独立命令词。否则 has_perm / FORBIDDEN 这类参数文本
+  // （"perm" 尾部的 rm + 空格 + "/"）会被误判为删除文件系统根，纯 grep/echo 被硬 deny。
+  if (/\brm\s+(?:-[a-z]*[fr][a-z]*\s+)*\/(?:\s|$)/.test(compact)) return reasonText(locale, '不允许删除文件系统根', 'deleting the filesystem root is not permitted') + noEscalationHint(locale)
+  if (/(?:\brm|\bRemove-Item)\s+(?:-[a-z]*[fr][a-z]*\s+)*(?:~|\$HOME|\$env:HOME)(?:\s|$)/i.test(compact)) return reasonText(locale, '不允许删除用户家目录', 'deleting the user home root is not permitted') + noEscalationHint(locale)
   return undefined
 }
 

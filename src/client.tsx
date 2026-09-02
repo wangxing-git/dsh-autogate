@@ -104,6 +104,8 @@ class SafeAutoCardController {
   form: CardForm
   store: any
   llmApi: any
+  /** 可配置 provider → settingsNs 映射（discoverModels 的第一参数；随 fetchModelCatalog 刷新）。 */
+  discoveryNamespaces = new Map<string, string>()
 
   constructor(settingsSource: ApiSettingsSource, llmApi: any) {
     this.llmApi = llmApi
@@ -117,6 +119,7 @@ class SafeAutoCardController {
       numberField('classifierTimeoutMs'),
       numberField('classifierMaxOutputTokens'),
       boolField('classifierRetry'),
+      boolField('classifierHttpDisableReasoning'),
       numberField('proposalContextMaxMessageLen'),
       numberField('proposalContextMaxChars'),
       numberField('proposalContextMaxTotalChars'),
@@ -138,6 +141,7 @@ class SafeAutoCardController {
       classifierTimeoutMs: this.form.field('classifierTimeoutMs'),
       classifierMaxOutputTokens: this.form.field('classifierMaxOutputTokens'),
       classifierRetry: this.form.field('classifierRetry'),
+      classifierHttpDisableReasoning: this.form.field('classifierHttpDisableReasoning'),
       proposalContextMaxMessageLen: this.form.field('proposalContextMaxMessageLen'),
       proposalContextMaxChars: this.form.field('proposalContextMaxChars'),
       proposalContextMaxTotalChars: this.form.field('proposalContextMaxTotalChars'),
@@ -156,18 +160,71 @@ class SafeAutoCardController {
       resetField: (field: string) => pairedReset(actions, field),
       setOptions: (field: string, options: readonly string[]) => this.form.setOptions(field, options),
       fetchModelCatalog: () => this.fetchModelCatalog(),
+      fetchModels: (provider: string) => this.fetchModels(provider),
     }
   }
 
-  /** 复用 DSH 宿主现成的 llm.models 端点拉取全局模型目录（groups：provider 分组 → models）。 */
-  async fetchModelCatalog(): Promise<{ groups: any[] }> {
-    if (this.llmApi === undefined || typeof this.llmApi.models !== 'function') return { groups: [] }
+  /**
+   * 拉取 provider 路由候选（DSH 宿主 llm.listProviders；alpha.3 起目录只含 id/name，不再携带 models），
+   * 并同步刷新「可配置 provider → settingsNs」映射（llm.listConfigurableProviders），
+   * 供 fetchModels 调 llm.discoverModels 时按命名空间发现模型候选。
+   */
+  async fetchModelCatalog(): Promise<{ providers: string[] }> {
+    if (this.llmApi === undefined || typeof this.llmApi.listProviders !== 'function') return { providers: [] }
     try {
-      const { result } = await this.llmApi.models({})
-      if (result?.ok !== true) return { groups: [] }
-      return { groups: Array.isArray(result.value?.groups) ? result.value.groups : [] }
+      const [response, namespaces] = await Promise.all([
+        this.llmApi.listProviders(),
+        this.fetchDiscoveryNamespaces(),
+      ])
+      if (response?.ok !== true || !Array.isArray(response.value)) return { providers: [] }
+      this.discoveryNamespaces = namespaces
+      return {
+        providers: response.value
+          .map((entry: any) => String(entry.id))
+          .filter((id: string) => id !== ''),
+      }
     } catch {
-      return { groups: [] }
+      return { providers: [] }
+    }
+  }
+
+  /** 从可配置 provider 目录构建 provider → settingsNs 映射（discoverModels 的第一参数）；目录不可用时返回空映射。 */
+  private async fetchDiscoveryNamespaces(): Promise<Map<string, string>> {
+    const namespaces = new Map<string, string>()
+    if (typeof this.llmApi?.listConfigurableProviders !== 'function') return namespaces
+    try {
+      const response = await this.llmApi.listConfigurableProviders()
+      if (response?.ok !== true || !Array.isArray(response.value)) return namespaces
+      for (const entry of response.value) {
+        const provider = entry?.provider
+        const ns = entry?.settingsNs
+        if (typeof provider === 'string' && provider !== '' && typeof ns === 'string' && ns !== '') {
+          namespaces.set(provider, ns)
+        }
+      }
+    } catch {
+      // 目录拉取失败 → 空映射：模型候选留空，仍可自由输入
+    }
+    return namespaces
+  }
+
+  /**
+   * 按 provider 经 llm.discoverModels 拉取模型候选（新目录端点）；旧版宿主无该端点、
+   * provider 无 settingsNs 映射或发现失败时返回空列表——候选仅供快速选择，仍可自由输入。
+   */
+  async fetchModels(provider: string): Promise<string[]> {
+    const id = String(provider)
+    if (id === '' || typeof this.llmApi?.discoverModels !== 'function') return []
+    const ns = this.discoveryNamespaces.get(id)
+    if (ns === undefined) return []
+    try {
+      const response = await this.llmApi.discoverModels(ns, { provider: id })
+      if (response?.ok !== true || !Array.isArray(response.value)) return []
+      return response.value
+        .map((entry: any) => String(entry.id))
+        .filter((modelId: string) => modelId !== '')
+    } catch {
+      return []
     }
   }
 }
@@ -301,24 +358,29 @@ function SafeAutoCard(props: any) {
   const { t } = props
   const state = props.useSafeAutoCard((snapshot: any) => snapshot)
   const [open, setOpen] = useState(false)
-  const [groups, setGroups] = useState<any[]>([])
   const currentProvider = state.classifierProvider?.text ?? ''
   injectCss()
-  // 展开设置卡时经 DSH 宿主现成的 llm.models 端点拉取一次全局模型目录（provider 分组 → models），
+  // 展开设置卡时经 DSH 宿主目录端点拉取 provider 路由候选（llm.listProviders + listConfigurableProviders），
   // 候选仅用于快速选择，仍可自定义输入。
   useEffect(() => {
     if (!open) return
-    void props.fetchModelCatalog().then((catalog: { groups: any[] }) => {
-      setGroups(catalog.groups)
-      props.setOptions('classifierProvider', catalog.groups.map((g) => g.id))
+    void props.fetchModelCatalog().then((catalog: { providers: string[] }) => {
+      props.setOptions('classifierProvider', catalog.providers)
     })
   }, [open])
-  // provider 变化时从已拉取的分组本地联动 model 候选；未知/空则清空 model 候选。
+  // provider 变化时经 llm.discoverModels 按需拉取模型候选（带竞态防护：仅应用最后一次结果）；空/未知则清空候选。
   useEffect(() => {
     if (!open) return
-    const group = groups.find((g) => g.id === currentProvider)
-    props.setOptions('classifierModel', group !== undefined ? group.models.map((m: any) => m.id) : [])
-  }, [open, currentProvider, groups])
+    let stale = false
+    if (currentProvider === '') {
+      props.setOptions('classifierModel', [])
+      return
+    }
+    void props.fetchModels(currentProvider).then((models: string[]) => {
+      if (!stale) props.setOptions('classifierModel', models)
+    })
+    return () => { stale = true }
+  }, [open, currentProvider])
   if (!state.available) return null
   const disabled = !state.writable
   const blocked = !state.dirty || state.invalid || state.saving
@@ -333,6 +395,7 @@ function SafeAutoCard(props: any) {
     { key: 'classifierTimeoutMs', label: t('classifierTimeoutMs'), hint: t('classifierTimeoutMsHint') },
     { key: 'classifierMaxOutputTokens', label: t('classifierMaxOutputTokens'), hint: t('classifierMaxOutputTokensHint') },
     { key: 'classifierRetry', label: t('classifierRetry'), hint: t('classifierRetryHint'), bool: true },
+    { key: 'classifierHttpDisableReasoning', label: t('classifierHttpDisableReasoning'), hint: t('classifierHttpDisableReasoningHint'), bool: true },
     { key: 'proposalContextMaxMessageLen', label: t('proposalContextMaxMessageLen'), hint: t('proposalContextMaxMessageLenHint') },
     { key: 'proposalContextMaxChars', label: t('proposalContextMaxChars'), hint: t('proposalContextMaxCharsHint') },
     { key: 'proposalContextMaxTotalChars', label: t('proposalContextMaxTotalChars'), hint: t('proposalContextMaxTotalCharsHint') },
@@ -518,7 +581,7 @@ function TrailPanel(props: any) {
 }
 
 // ==== apply ====
-const inject = ['slots', 'locale', 'connection', 'sessions']
+const inject = ['slots', 'locale', 'connection', 'sessions', 'remote', 'remote.settings', 'remote.llm']
 
 function apply(ctx: any) {
   injectCss()
@@ -526,11 +589,12 @@ function apply(ctx: any) {
   const t = ctx.locale.bind(SETTINGS_NS)
   // rpc 仅剩审批轨迹面板使用（/autogate trail 端点）；设置卡读写改走官方 settings API。
   const rpc = ctx.connection?.rpc
-  // 复用 DSH 宿主现成的模型目录 API（llm.models），与对话框模型选择器同源。
-  const llmApi = ctx.connection?.api?.llm
+  // 复用 DSH 宿主现成的模型目录 API（remote.llm：listProviders / listConfigurableProviders / discoverModels），
+  // 与对话框模型选择器同源；旧版宿主无 discoverModels 时模型候选自动降级为空（仍可自由输入）。
+  const llmApi = ctx.remote.llm
   // 设置卡与轨迹浮窗共享同一个 settings 数据源：设置卡保存 showTrail 后，
   // TrailController 经订阅即时启停轮询，无需重新拉取。
-  const settingsSource = new ApiSettingsSource(ctx.connection?.api?.settings, SETTINGS_NS)
+  const settingsSource = new ApiSettingsSource(ctx.remote.settings, SETTINGS_NS)
   const controller = new SafeAutoCardController(settingsSource, llmApi)
   // 新版 DSH 中 settings.plugin.item 是 keyed slot：key 即卡片所编辑的 settings
   // namespace（autogate），设置页按 namespace 分发渲染；keyed slot 不再接受 id/order。

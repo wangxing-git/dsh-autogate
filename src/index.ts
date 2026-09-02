@@ -1,14 +1,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
-import { effectivePermissionPreset } from '@deepseek-ai/dsh-permission-presets'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { CLASSIFIER_SYSTEM_PROMPT, createDshClassifier, createHttpClassifier, extractEscalationJustification, isEscalationApprovalReason, sanitizeClassifierArguments, sanitizeClassifierText, sanitizeClassifierTextTail } from './classifier.js'
 import { resolveRoots, type RootOptions } from './paths.js'
 import { assessTool, hardDenyReason, isSandboxEscalationRetry, summarizeToolArguments } from './policy.js'
 import { setApprovalPolicy, type ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
+import type {} from '@deepseek-ai/dsh-settings'
 import type { ClassifierInput, ClassifierTokenUsage, ManagedMode, SafetyClassifier } from './types.js'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { createApprovalTrail, type ApprovalDecision, type ApprovalLayer } from './trail.js'
 import type { UiLocale } from './i18n.js'
 
@@ -61,6 +60,8 @@ export interface Config {
   readonly classifierMaxOutputTokens?: number
   /** 分类器输出解析失败时静默重试一次；默认开启（temperature 0 下偶发格式抖动）。 */
   readonly classifierRetry?: boolean
+  /** HTTP 分类端点请求显式关闭思考模式（reasoning_effort: "none"）；默认开启，端点不支持该参数（如 DeepSeek 官方 API 报 400）时关闭。 */
+  readonly classifierHttpDisableReasoning?: boolean
   /** 短指代消息长度阈值（字符）：长度不超过该值的直接人类消息才携带 AI 提议上下文用于消解指代；默认 10。 */
   readonly proposalContextMaxMessageLen?: number
   /** 单条 AI 提议上下文上限（字符）；默认 400。 */
@@ -87,6 +88,7 @@ export const Config: z<Config> = z.object({
   classifierTimeoutMs: z.number().default(8_000).min(100).max(60_000).description('分类器超时毫秒数，超时 fail-closed'),
   classifierMaxOutputTokens: z.number().default(1_024).min(64).max(4_096).description('分类器输出 token 上限'),
   classifierRetry: z.boolean().default(true).description('分类器输出解析失败时静默重试一次；默认开启'),
+  classifierHttpDisableReasoning: z.boolean().default(true).description('HTTP 分类端点请求显式关闭思考模式（reasoning_effort=none）；端点不支持该参数时关闭'),
   proposalContextMaxMessageLen: z.natural().default(10).min(1).max(200).description('短指代消息长度阈值（字符）：长度不超过该值才携带 AI 提议上下文；默认 10'),
   proposalContextMaxChars: z.natural().default(400).min(64).max(4_000).description('单条 AI 提议上下文上限（字符）；默认 400'),
   proposalContextMaxTotalChars: z.natural().default(2_000).min(64).max(8_000).description('AI 提议上下文总预算（字符）；默认 2000'),
@@ -95,9 +97,18 @@ export const Config: z<Config> = z.object({
   fullAutoPresetName: z.string().default(AUTO_PERMISSION_PRESET).description('全自动权限预设键（默认 auto）：该预设下审批不再人工弹窗，LLM 裁决为最终决定'),
 })
 
+/** 从会话事件倒序解析最近一次 permission/preset 选择（对齐 dsh-permission-presets 的投影语义）。 */
+function effectivePermissionPreset(events: readonly unknown[]): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index] as { type?: unknown; data?: { preset?: unknown } }
+    if (event.type === 'permission/preset' && typeof event.data?.preset === 'string') return event.data.preset
+  }
+  return undefined
+}
+
 /** 当前会话是否使用 Auto 权限预设。 */
 export function isAutoPermissionExecution(exec: Readonly<ToolExecution>, presetName = AUTO_PERMISSION_PRESET): boolean {
-  const events = exec.agent?.session.events
+  const events = exec.agent?.session.snapshotEvents()
   return events !== undefined && effectivePermissionPreset(events) === presetName
 }
 
@@ -139,7 +150,7 @@ export function managedPermissionAuthority(
   fullPreset = AUTO_PERMISSION_PRESET,
 ): { agent: NonNullable<ToolExecution['agent']>; mode: ManagedMode } | undefined {
   const modeOf = (target: ToolExecution['agent']): ManagedMode | undefined => {
-    const events = target?.session.events
+    const events = target?.session.snapshotEvents()
     if (events === undefined) return undefined
     const preset = effectivePermissionPreset(events)
     if (preset === semiPreset) return 'semi-auto'
@@ -227,6 +238,7 @@ function classifierFrom(ctx: Context, config: Config, locale: () => UiLocale | u
     ...(apiKey === undefined || apiKey === '' ? {} : { apiKey }),
     timeoutMs,
     retryOnFailure: config.classifierRetry ?? true,
+    disableReasoning: config.classifierHttpDisableReasoning ?? true,
   })
 }
 
@@ -271,8 +283,9 @@ function trustedUserMessages(authority: ToolExecution['agent'], limits: Proposal
   const dispatchQa = new Map<number, string>()
   const proposalContexts = new Map<number, string>()
   let lastAssistant = ''
-  for (let index = 0; index < authority.session.events.length; index += 1) {
-    const event = authority.session.events[index]
+  const events = authority.session.snapshotEvents()
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index]
     if (event?.type === 'tool/call' && event.data.name === 'ask_user_question') {
       const text = askUserQuestionsText(event.data.arguments)
       if (text !== '') askQuestions.set(String(event.data.callId), text)
@@ -304,8 +317,8 @@ function trustedUserMessages(authority: ToolExecution['agent'], limits: Proposal
   // proposal 上下文归属：同一 AI 回复后的消息组内只要有短指代，就把上下文附给组内最早（第一条）消息。
   type CollectedMessage = { sanitized: string; short: boolean; proposal: string }
   const collected: CollectedMessage[] = []
-  for (let index = authority.session.events.length - 1; index >= 0 && collected.length < 8 && remaining > 0; index -= 1) {
-    const event = authority.session.events[index]
+  for (let index = events.length - 1; index >= 0 && collected.length < 8 && remaining > 0; index -= 1) {
+    const event = events[index]
     if (event?.type === 'user/message' && event.data.source.kind === 'user') {
       const text = event.data.content
         .filter((block): block is Extract<(typeof event.data.content)[number], { type: 'text' }> => block.type === 'text')
@@ -478,7 +491,7 @@ function formatAskUserAnswers(answers: unknown[]): string {
  */
 function toolCallArgumentsFromEvents(agent: ToolExecution['agent'], callId: string): unknown {
   if (agent === undefined || callId === '') return undefined
-  for (const event of agent.session.events) {
+  for (const event of agent.session.snapshotEvents()) {
     if (event?.type !== 'tool/call') continue
     if (String(event.data.callId) !== callId) continue
     const raw = event.data.arguments
@@ -528,17 +541,19 @@ export function apply(ctx: Context, config: Config = {}): void {
   }
 
   // 无缝接入 DSH 配置：settings 挂载时用 settings.yaml 的 autogate 段（热重载），未挂载回退 entry config。
-  installSettingsSection(ctx, settingsNamespace('autogate'), Config, entry, {
-    setSource(next) { source = next },
-    onChange() { rebuild() },
-    validate: validateConfig,
+  ctx.inject(['settings'], (sctx) => {
+    sctx.settings.installSection(ctx, 'autogate', Config, entry, {
+      setSource: (current: () => Config) => { source = current },
+      onChange: () => { rebuild() },
+      validate: validateConfig,
+    })
   })
   rebuild()
 
   // 跟随 DSH 设置语言：locale.preference（'zh'|'en'）由 dsh-client-locale 持久化在同一个
   // settings 文档里，服务端直接读取即可；据此让 L0 理由与 L1 分类 reason 使用对应语言。
   ctx.inject(['settings'], (sctx) => {
-    const localeNs = settingsNamespace('locale')
+    const localeNs = 'locale'
     const readLocale = (): void => {
       const value = sctx.settings.get(localeNs) as { preference?: UiLocale } | undefined
       // 未显式设置（preference 缺失）时回退中文，与客户端浏览器语言 fallback 一致。

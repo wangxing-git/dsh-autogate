@@ -229,6 +229,27 @@ describe('hardDenyShellReason 删除家目录与 pwsh 自毁', () => {
   })
 })
 
+describe('hardDenyShellReason 删根/删家目录词边界（参数文本不误判）', () => {
+  // 回归：无词边界时，echo 文本 "has_perm / FORBIDDEN" 中 "perm" 尾部的 rm + 空格 + "/"
+  // 被误判为删除文件系统根，导致纯 grep/echo 命令被 L0 硬 deny 且不可提权。
+  it('echo/grep 参数文本里的 perm、~ 、$HOME 不误判为删根/删家目录', () => {
+    const cmd = 'echo "=== login_with_ip / has_perm / FORBIDDEN / RESTRICTED_ACCESS / is_member 在 python_api_v2.py 中的分布 ===";\ngrep -n "login_with_ip|has_perm|FORBIDDEN|RESTRICTED_ACCESS|is_member|permit_all|status_code" rq_gecko_project/api/python_api_v2.py'
+    expect(hardDenyShellReason(cmd, 'bash', roots)).toBeUndefined()
+    expect(hardDenyShellReason('echo has_perm ~', 'bash', roots)).toBeUndefined()
+    expect(hardDenyShellReason('echo "check has_perm $HOME first"', 'bash', roots)).toBeUndefined()
+  })
+  it('命令位置的 rm 删根仍硬拒绝（含复合命令与变体 flag）', () => {
+    expect(hardDenyShellReason('rm -rf /', 'bash', roots)).toContain('filesystem root')
+    expect(hardDenyShellReason('rm -fr /', 'bash', roots)).toContain('filesystem root')
+    expect(hardDenyShellReason('echo hi; rm -rf /', 'bash', roots)).toContain('filesystem root')
+  })
+  it('命令位置的 rm / Remove-Item 删家目录仍硬拒绝（含复合命令）', () => {
+    expect(hardDenyShellReason('rm -rf ~', 'bash', roots)).toContain('user home root')
+    expect(hardDenyShellReason('echo hi; rm -rf $HOME', 'bash', roots)).toContain('user home root')
+    expect(hardDenyShellReason('Remove-Item -Recurse -Force $env:HOME', 'pwsh', roots)).toContain('user home root')
+  })
+})
+
 describe('assessShell pwsh 只读白名单', () => {
   it('无参数 pwsh 只读命令放行', () => {
     expect(assessShell('Get-Location', 'pwsh', roots).decision).toBe('allow')

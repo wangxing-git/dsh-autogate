@@ -1,19 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// client-logic 依赖 DSH Web 宿主注入的 createSnapshotStore，测试中 mock 为内存 store。
-vi.mock('@deepseek-ai/dsh-client-runtime/client', () => {
-  function fakeStore(initial: unknown) {
-    let value = initial
-    const listeners = new Set<() => void>()
-    return {
-      getSnapshot: () => value,
-      set: (next: unknown) => { value = next; for (const l of listeners) l() },
-      subscribe: (l: () => void) => { listeners.add(l); return () => listeners.delete(l) },
-    }
-  }
-  return { createSnapshotStore: fakeStore }
-})
-
 import Schema from '@deepseek-ai/schemastery'
 import { ApiSettingsSource, CardForm, TrailController, boolField, en, formatDuration, formatTime, numberField, pairedReset, pairedResetField, selectField, textField, zh } from '../src/client-logic.js'
 
@@ -279,8 +265,8 @@ describe('ApiSettingsSource 官方 settings 通道数据源', () => {
     }
     const mutations: any[] = []
     const api: any = {
-      describe: async () => ({ result: { ok: true, value: { namespaces: [view], writable: true } } }),
-      mutate: async (payload: any) => { mutations.push(payload); return { result: { ok: true, value: view } } },
+      describe: async () => ({ ok: true, value: { namespaces: [view], writable: true } }),
+      mutate: async (ns: string, ops: any[], expectedRevision: any) => { mutations.push({ ns, ops, expectedRevision }); return { ok: true, value: view } },
       _setView: (next: any) => { view = next },
       _mutations: mutations,
     }
@@ -335,14 +321,14 @@ describe('ApiSettingsSource 官方 settings 通道数据源', () => {
   })
 
   it('describe 返回非 ok → status unavailable', async () => {
-    const api = mockApi({ describe: async () => ({ result: { ok: false } }) })
+    const api = mockApi({ describe: async () => ({ ok: false, error: { message: 'down' } }) })
     const source = new ApiSettingsSource(api, 'autogate')
     await source.refresh()
     expect(source.getSnapshot().status).toBe('unavailable')
   })
 
   it('namespace 未暴露 → status unavailable', async () => {
-    const api = mockApi({ describe: async () => ({ result: { ok: true, value: { namespaces: [], writable: true } } }) })
+    const api = mockApi({ describe: async () => ({ ok: true, value: { namespaces: [], writable: true } }) })
     const source = new ApiSettingsSource(api, 'autogate')
     await source.refresh()
     expect(source.getSnapshot().status).toBe('unavailable')
@@ -381,7 +367,7 @@ describe('ApiSettingsSource 官方 settings 通道数据源', () => {
   })
 
   it('write 失败 → 返回 ok:false 且透传服务端拒绝原因', async () => {
-    const api = mockApi({ mutate: async () => ({ result: { ok: false, error: { code: 'settings-rejected', message: 'classifierProvider 与 classifierModel 必须成对配置', details: { ns: 'autogate' } } } }) })
+    const api = mockApi({ mutate: async () => ({ ok: false, error: { code: 'settings-rejected', message: 'classifierProvider 与 classifierModel 必须成对配置', details: { ns: 'autogate' } } }) })
     const source = new ApiSettingsSource(api, 'autogate')
     expect(await source.write({ preflight: true }, [])).toEqual({ ok: false, message: 'classifierProvider 与 classifierModel 必须成对配置' })
   })
@@ -392,10 +378,10 @@ describe('ApiSettingsSource 官方 settings 通道数据源', () => {
       schema: Schema.object({ preflight: Schema.boolean().default(false) }).toJSON(),
     }
     const api: any = {
-      describe: async () => ({ result: { ok: true, value: { namespaces: [view], writable: true } } }),
+      describe: async () => ({ ok: true, value: { namespaces: [view], writable: true } }),
       mutate: async () => {
         view = { ...view, revision: 2 }
-        return { result: { ok: false, error: { code: 'settings-conflict', message: '配置已被其他客户端修改', details: { ns: 'autogate', expected: 1, actual: 2 } } } }
+        return { ok: false, error: { code: 'settings-conflict', message: '配置已被其他客户端修改', details: { ns: 'autogate', expected: 1, actual: 2 } } }
       },
     }
     const source = new ApiSettingsSource(api, 'autogate')

@@ -1,6 +1,6 @@
 {
   "name": "dsh-autogate",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DeepSeek Harness 自动审批插件：在 workspace-write 沙箱之上增加 Auto 档——确定性规则放行/拒绝，模糊操作由 LLM 裁决，危险操作转人工。保留工作区沙箱边界，不放宽为 full-access。",
   "keywords": [
     "deepseek",
@@ -38,7 +38,6 @@
       "inject": [
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-api-remotes"
       ],
@@ -56,18 +55,17 @@
     "node": ">=22.19.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-api-remotes": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-llm": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-permission-presets": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-settings": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.8",
-    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-api-remotes": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-client-connection": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-client-locale": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-llm": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-permission-presets": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-settings": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-tools": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-user-approval": "^0.1.2-alpha.4",
+    "@deepseek-ai/schemastery": "^3.18.2",
     "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
@@ -78,9 +76,6 @@
       "optional": true
     },
     "@deepseek-ai/dsh-client-locale": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-runtime": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-settings": {
@@ -112,13 +107,13 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-llm": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-permission-presets": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-settings": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.8",
-    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-llm": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-permission-presets": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-settings": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-tools": "^0.1.2-alpha.4",
+    "@deepseek-ai/dsh-user-approval": "^0.1.2-alpha.4",
+    "@deepseek-ai/schemastery": "^3.18.2",
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^3.2.7",
     "esbuild": "^0.28.2",

@@ -69,6 +69,8 @@ Configuration is wired through the DSH settings service (`ctx.settings`): write 
       # Standalone OpenAI-compatible classification endpoint (optional; must be HTTPS, loopback may use http)
       # classifierEndpoint: https://api.example.com/v1/chat/completions
       # classifierApiKeyEnv: DEEPSEEK_API_KEY   # environment variable name for the HTTP endpoint API key
+      # classifierHttpDisableReasoning: true    # explicitly disable thinking on the HTTP classifier request (reasoning_effort=none, default on);
+      #                                         # supported by official OpenAI endpoints; set false when an incompatible endpoint (e.g. the DeepSeek API) rejects it with 400
       # workspaceRoot: /path/to/ws              # override workspace root (default: session cwd)
       # tempRoots: [/tmp]                       # trusted temporary directories (default: system temp dir)
 

@@ -270,6 +270,12 @@ export interface HttpClassifierConfig {
   locale?: () => UiLocale | undefined
   /** 分类器输出解析失败时静默重试一次；默认关闭，fetch / HTTP 状态错误不重试。 */
   retryOnFailure?: boolean
+  /**
+   * 请求体显式关闭思考模式（reasoning_effort: "none"）；默认开启。
+   * OpenAI 官方端点接受该参数（推理模型不开启思考，响应快、不超时）；
+   * 不认识的 OpenAI 兼容端点（如 DeepSeek 官方 API）会以 400 拒绝，此时须关闭本开关。
+   */
+  disableReasoning?: boolean
 }
 
 function responseContent(value: unknown): string {
@@ -315,21 +321,26 @@ export function createHttpClassifier(config: HttpClassifierConfig): SafetyClassi
         const timeout = AbortSignal.timeout(config.timeoutMs)
         const combined = AbortSignal.any([signal, timeout])
         // fetch / HTTP 状态错误直接抛出，不重试。
+        // 审批分类只做两态裁决：显式发送 reasoning_effort: "none" 关闭思考模式（与 DSH 内部分类器的
+        // reasoningEffort off 对齐），避免推理模型默认思考拖慢响应、超过 timeoutMs 导致 fail-closed 误拒。
+        // OpenAI 官方端点接受该参数；DeepSeek 等不认识的兼容端点会 400，经 disableReasoning 关闭发送。
+        const requestBody: Record<string, unknown> = {
+          model: config.model,
+          temperature: 0,
+          response_format: { type: 'json_object' },
+          ...(config.disableReasoning === false ? {} : { reasoning_effort: 'none' }),
+          messages: [
+            { role: 'system', content: withLocaleDirective(config.systemPrompt ?? CLASSIFIER_SYSTEM_PROMPT, config.locale?.()) },
+            { role: 'user', content: JSON.stringify(input) },
+          ],
+        }
         const response = await fetch(config.endpoint, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             ...(config.apiKey === undefined ? {} : { authorization: 'Bearer ' + config.apiKey }),
           },
-          body: JSON.stringify({
-            model: config.model,
-            temperature: 0,
-            response_format: { type: 'json_object' },
-            messages: [
-              { role: 'system', content: withLocaleDirective(config.systemPrompt ?? CLASSIFIER_SYSTEM_PROMPT, config.locale?.()) },
-              { role: 'user', content: JSON.stringify(input) },
-            ],
-          }),
+          body: JSON.stringify(requestBody),
           signal: combined,
         })
         if (!response.ok) throw new Error('classifier HTTP ' + response.status)

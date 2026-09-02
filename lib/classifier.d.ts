@@ -46,6 +46,12 @@ export interface HttpClassifierConfig {
     locale?: () => UiLocale | undefined;
     /** 分类器输出解析失败时静默重试一次；默认关闭，fetch / HTTP 状态错误不重试。 */
     retryOnFailure?: boolean;
+    /**
+     * 请求体显式关闭思考模式（reasoning_effort: "none"）；默认开启。
+     * OpenAI 官方端点接受该参数（推理模型不开启思考，响应快、不超时）；
+     * 不认识的 OpenAI 兼容端点（如 DeepSeek 官方 API）会以 400 拒绝，此时须关闭本开关。
+     */
+    disableReasoning?: boolean;
 }
 export declare function createHttpClassifier(config: HttpClassifierConfig): SafetyClassifier;
 export {};

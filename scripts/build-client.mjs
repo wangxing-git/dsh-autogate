@@ -7,7 +7,7 @@ await build({
   bundle: true,
   format: 'cjs',
   jsx: 'automatic',
-  external: ['react', 'react/jsx-runtime', '@deepseek-ai/dsh-client-runtime/client'],
+  external: ['react', 'react/jsx-runtime'],
   // __ModuleLoader__ 契约：factory 只接收 require，CJS 前奏（module/exports 声明）必须在
   // factory 闭包内自行提供——参照 @deepseek-ai/dsh-client-modules 官方 bundle 格式。
   banner: {

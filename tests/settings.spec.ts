@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { apply, Config } from '../src/index.js'
 
 type ApprovalListener = (req: any, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>
@@ -12,7 +11,7 @@ const allowChunks = [
 
 function autoAgent() {
   return {
-    session: { events: [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { cwd: '/ws' } },
+    session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { cwd: '/ws' } },
     options: { provider: 'deepseek', model: 'deepseek-chat' },
   }
 }
@@ -67,17 +66,20 @@ function createContext(settingsResolved?: () => Record<string, unknown>) {
   }
 
   const triggerSettingsMount = () => {
-    const scope = {
-      get: () => settingsResolved!(),
-      watch(cb: () => void) { watchers.push(cb); return () => {} },
-      update: async () => {},
-      replace: async () => {},
-    }
     const sctx = {
       settings: {
-        register(ns: unknown, _schema: unknown, opts: any) {
-          registered.push({ ns, opts })
-          opts.validate?.(scope.get())
+        installSection(_owner: unknown, ns: unknown, _schema: unknown, entry: unknown, hooks: any) {
+          const scope = {
+            get: () => settingsResolved!(),
+            watch(cb: () => void) { watchers.push(cb); return () => {} },
+            update: async () => {},
+            replace: async () => {},
+          }
+          registered.push({ ns, opts: { base: entry, ...(hooks.validate === undefined ? {} : { validate: hooks.validate }) } })
+          hooks.validate?.(scope.get())
+          hooks.setSource(() => scope.get())
+          hooks.onChange()
+          scope.watch(() => hooks.onChange())
           return scope
         },
         get(ns: unknown) {
@@ -103,7 +105,7 @@ describe('apply 接入 DSH settings（installSettingsSection）', () => {
     triggerSettingsMount()
 
     expect(registered).toHaveLength(1)
-    expect(registered[0].ns).toBe(settingsNamespace('autogate'))
+    expect(registered[0].ns).toBe('autogate')
     expect(registered[0].opts.base).toEqual({})
 
     const answerer = listeners.get('approval/request')![0]
@@ -152,6 +154,10 @@ describe('apply 接入 DSH settings（installSettingsSection）', () => {
 describe('Config schema 默认值', () => {
   it('classifierRetry 默认开启（true）', () => {
     expect(Config({}).classifierRetry).toBe(true)
+  })
+
+  it('classifierHttpDisableReasoning 默认开启（true）', () => {
+    expect(Config({}).classifierHttpDisableReasoning).toBe(true)
   })
 
   it('showTrail 默认显示（true）', () => {

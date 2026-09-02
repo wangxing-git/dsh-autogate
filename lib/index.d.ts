@@ -29,6 +29,8 @@ export interface Config {
     readonly classifierMaxOutputTokens?: number;
     /** 分类器输出解析失败时静默重试一次；默认开启（temperature 0 下偶发格式抖动）。 */
     readonly classifierRetry?: boolean;
+    /** HTTP 分类端点请求显式关闭思考模式（reasoning_effort: "none"）；默认开启，端点不支持该参数（如 DeepSeek 官方 API 报 400）时关闭。 */
+    readonly classifierHttpDisableReasoning?: boolean;
     /** 短指代消息长度阈值（字符）：长度不超过该值的直接人类消息才携带 AI 提议上下文用于消解指代；默认 10。 */
     readonly proposalContextMaxMessageLen?: number;
     /** 单条 AI 提议上下文上限（字符）；默认 400。 */
