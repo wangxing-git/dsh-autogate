@@ -29,6 +29,14 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 
 两种模式共享同一套 L0 确定性规则与 L1 LLM 分类器，唯一区别是 **L2 人工兜底**：半自动保留人工弹窗，全自动把 LLM 裁决作为最终决定。硬 deny（L0 guard）与 `preflight` 开关在两种模式下行为一致。
 
+### 子代理继承
+
+子代理（subagent）创建时继承父会话的托管档：父会话处于 `auto-ask` 或 `auto` 时，子代理会话的权限档与父一致（DSH 默认给子代理 pin `approval=never` 且不写权限档事件，本插件补写继承标记并放开为 ask）。
+
+- **权限档投影**：子代理会话补写 `permission/preset` 继承标记（`source: autogate`），UI 显示与父会话相同的 Auto 档，而非「工作区读写」；该标记只影响显示，不作为授权依据。
+- **授权依据锚定顶层**：子代理触发的一切 L0/L1/L2 审批，其授权依据（最近的直接人类消息与问答授权）始终取沿 parentSession 链向上找到的顶层 Auto 会话，避免无直接人类消息的子代理会话被误当作授权来源。
+- **子代理审批无人工兜底**：子代理的提权 / 工具 ask 请求由 LLM 终审，拒绝即拒绝、不转人工弹窗（子代理无可靠弹窗通道）。
+
 <p align="center">
   <img src="assets/autogate-modes.png" alt="两种模式对比：auto-ask 半自动（默认）与 auto 全自动，唯一区别是 L2 人工兜底" width="100%">
 </p>

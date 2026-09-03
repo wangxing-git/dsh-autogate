@@ -21,6 +21,14 @@ DeepSeek Harness auto-approval plugin: adds two permission presets — **semi-au
 
 Both modes share the same L0 deterministic rules and L1 LLM classifier; the only difference is the **L2 human fallback**: semi-auto keeps the human popup, full-auto treats the LLM decision as final. Hard deny (L0 guard) and the `preflight` switch behave identically in both modes.
 
+### Subagent inheritance
+
+Subagents inherit the managed preset of their parent: when the parent session runs `auto-ask` or `auto`, the subagent session shows the same preset (DSH pins `approval=never` on subagents and writes no preset event by default; this plugin appends an inheritance marker and relaxes the policy to ask).
+
+- **Preset projection**: the subagent session gets a `permission/preset` inheritance marker (`source: autogate`), so the UI shows the parent's Auto preset instead of "workspace-write"; the marker affects display only and is never treated as authorization.
+- **Authority anchored at the top**: for every L0/L1/L2 decision triggered by a subagent, the authorization basis (recent direct human messages and Q&A grants) is always taken from the top-level Auto session found up the parentSession chain, so a subagent session (which has no direct human messages) is never mistaken for the authority.
+- **No human fallback for subagents**: subagent escalation / tool-ask requests are decided by the LLM as final — deny means deny, with no human popup (subagents have no reliable popup channel).
+
 ## Key differences from similar plugins
 
 - **Ordinary calls stay workspace-write**: L0/L1 decisions never widen the sandbox, so even if the L1 LLM misjudges, ordinary file writes stay confined to the workspace (unlike similar plugins that run every call with danger-full-access). The **L2 escalation channel is the exception**: an approved escalation runs that single call with the requested wider sandbox — see the security disclaimer.

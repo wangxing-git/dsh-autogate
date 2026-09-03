@@ -593,6 +593,20 @@ describe('autoPermissionAuthority 与 isAutoPermissionExecution', () => {
     const exec = { name: 'bash', arguments: {}, agent: child }
     expect(autoPermissionAuthority(exec as any, () => undefined)).toBeUndefined()
   })
+  it('subagent 自身带继承标记（source=autogate）不直接命中，仍沿链返回顶层 Auto', () => {
+    const parent = { session: { snapshotEvents: () => autoEvents(), header: { origin: 'primary', cwd: '/ws' } } }
+    const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto', source: 'autogate' } }], header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
+    const lookup = (id: unknown) => (id === 'p1' ? parent : undefined)
+    const exec = { name: 'bash', arguments: {}, agent: child }
+    expect(isAutoPermissionExecution(exec as any)).toBe(false)
+    expect(autoPermissionAuthority(exec as any, lookup)).toBe(parent)
+  })
+  it('subagent 用户手动切换的 preset（无 source）直接命中自身', () => {
+    const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto' } }], header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
+    const exec = { name: 'bash', arguments: {}, agent: child }
+    expect(isAutoPermissionExecution(exec as any)).toBe(true)
+    expect(autoPermissionAuthority(exec as any, () => undefined)).toBe(child)
+  })
   it('循环 parentSession 返回 undefined', () => {
     const a = { session: { snapshotEvents: () => neverEvents(), header: { origin: 'subagent', parentSession: 'b' } } }
     const b = { session: { snapshotEvents: () => neverEvents(), header: { origin: 'subagent', parentSession: 'a' } } }
@@ -998,6 +1012,16 @@ describe('managedPermissionAuthority', () => {
   it('无 agent 返回 undefined', () => {
     expect(managedPermissionAuthority(undefined as any, () => undefined)).toBeUndefined()
   })
+  it('subagent 自身带继承标记（source=autogate）→ 跳过自身，authority 仍是父会话', () => {
+    const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto' } }], header: { origin: 'primary' } } }
+    const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto', source: 'autogate' } }], header: { origin: 'subagent', parentSession: 'p1' } } }
+    const lookup = (id: unknown) => (id === 'p1' ? parent : undefined)
+    expect(managedPermissionAuthority(child as any, lookup as any)).toEqual({ agent: parent, mode: 'full-auto' })
+  })
+  it('subagent 用户手动切换的 preset（无 source）→ 自身成为授权会话', () => {
+    const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'subagent', parentSession: 'p1' } } }
+    expect(managedPermissionAuthority(child as any, () => undefined)).toEqual({ agent: child, mode: 'semi-auto' })
+  })
 })
 
 describe('session/created 监听器（子代理 approval 放开）', () => {
@@ -1012,14 +1036,29 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
     }
   }
 
-  it('Auto 父会话的子代理 → 放开为 ask', () => {
+  it('Auto 父会话的子代理 → 继承权限档并放开为 ask', () => {
     const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
     const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
     apply(ctx as any)
     const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
     const { appended, session } = makeSession('subagent', 'sess-parent')
     listener(session)
-    expect(appended).toEqual([['approval/policy', { policy: 'ask' }]])
+    expect(appended).toEqual([
+      ['permission/preset', { preset: 'auto-ask', source: 'autogate' }],
+      ['approval/policy', { policy: 'ask' }],
+    ])
+  })
+  it('全自动父会话的子代理 → 继承 preset=auto', () => {
+    const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto' } }], header: { origin: 'primary' } } }
+    const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
+    apply(ctx as any)
+    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const { appended, session } = makeSession('subagent', 'sess-parent')
+    listener(session)
+    expect(appended).toEqual([
+      ['permission/preset', { preset: 'auto', source: 'autogate' }],
+      ['approval/policy', { policy: 'ask' }],
+    ])
   })
 
   it('非子代理 session → 不放开', () => {
@@ -1050,16 +1089,20 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
     expect(appended).toHaveLength(0)
   })
 
-  it('孙代理（父自身也是 subagent）沿 parentSession 链找到顶层 Auto 祖先 → 放开为 ask', () => {
+  it('孙代理（父自身也是 subagent）沿 parentSession 链找到顶层 Auto 祖先 → 继承权限档并放开为 ask', () => {
     const top = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
-    const middle = { session: { snapshotEvents: () => [], header: { origin: 'subagent', parentSession: 'sess-top' } } }
+    // middle 自身带插件写入的继承标记（真实场景）：授权解析必须跳过该标记继续上溯到 top。
+    const middle = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask', source: 'autogate' } }], header: { origin: 'subagent', parentSession: 'sess-top' } } }
     const agentsMap = new Map([['sess-top', top], ['sess-middle', middle]])
     const { ctx, listeners } = createMockContext(allowChunks, agentsMap)
     apply(ctx as any)
     const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
     const { appended, session } = makeSession('subagent', 'sess-middle')
     listener(session)
-    expect(appended).toEqual([['approval/policy', { policy: 'ask' }]])
+    expect(appended).toEqual([
+      ['permission/preset', { preset: 'auto-ask', source: 'autogate' }],
+      ['approval/policy', { policy: 'ask' }],
+    ])
   })
 
   it('子代理 session 初始已含 delegation 的 never，放开后 ask 后写覆盖（never 后跟 ask）', () => {
@@ -1074,7 +1117,9 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
       append: (type: string, data: unknown) => { events.push({ type, data }) },
     }
     listener(session)
-    expect(events.map(e => (e.type === 'approval/policy' ? e.data.policy : e.type))).toEqual(['never', 'ask'])
+    expect(events.map(e => e.type)).toEqual(['approval/policy', 'permission/preset', 'approval/policy'])
+    expect(events.map(e => (e.type === 'approval/policy' ? e.data.policy : e.data.preset))).toEqual(['never', 'auto-ask', 'ask'])
+    expect((events[1].data as any).source).toBe('autogate')
   })
 })
 
