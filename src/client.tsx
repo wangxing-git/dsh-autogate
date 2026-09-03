@@ -1,6 +1,6 @@
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState } from 'react'
-import { ApiSettingsSource, CardForm, SETTINGS_NS, TrailController, boolField, en, formatDuration, formatTime, numberField, pairedReset, pairedResetField, selectField, textField, zh } from './client-logic.js'
+import { ApiSettingsSource, CardForm, SETTINGS_NS, TrailController, boolField, en, formatDuration, formatTime, modelsFromCatalog, numberField, pairedReset, pairedResetField, selectField, textField, zh } from './client-logic.js'
 
 // ==== 卡片样式（复用 DSH 主题变量，运行时注入） ====
 const CSS = `.sa_card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;list-style:none}
@@ -104,11 +104,15 @@ class SafeAutoCardController {
   form: CardForm
   store: any
   llmApi: any
-  /** 可配置 provider → settingsNs 映射（discoverModels 的第一参数；随 fetchModelCatalog 刷新）。 */
+  sessionApi: any
+  /** 可配置 provider → settingsNs 映射（discoverModels 降级路径的第一参数；随 fetchModelCatalog 刷新）。 */
   discoveryNamespaces = new Map<string, string>()
+  /** 最近一次经 session/modelCatalog 拉取的全局模型目录（与对话框模型选择器同源；随 fetchModelCatalog 刷新）。 */
+  modelCatalog: any = null
 
-  constructor(settingsSource: ApiSettingsSource, llmApi: any) {
+  constructor(settingsSource: ApiSettingsSource, llmApi: any, sessionApi: any) {
     this.llmApi = llmApi
+    this.sessionApi = sessionApi
     this.form = new CardForm(settingsSource, [
       textField('presetName'),
       textField('fullAutoPresetName'),
@@ -165,17 +169,21 @@ class SafeAutoCardController {
   }
 
   /**
-   * 拉取 provider 路由候选（DSH 宿主 llm.listProviders；alpha.3 起目录只含 id/name，不再携带 models），
-   * 并同步刷新「可配置 provider → settingsNs」映射（llm.listConfigurableProviders），
-   * 供 fetchModels 调 llm.discoverModels 时按命名空间发现模型候选。
+   * 拉取 provider 路由候选（llm.listProviders）并同步刷新全局模型目录（session/modelCatalog，
+   * 与对话框模型选择器同源）。alpha.5 起旧 llm.models 端点移除，模型候选的权威来源是
+   * session/modelCatalog——llm.discoverModels 只为「询问新增端点」设计，且仅注册了发现服务的
+   * adapter（如 pi-ai）会应答，deepseek 官方与用户自定义路由一律 NO_DISCOVERY，不能作为候选
+   * 主来源；它保留为目录端点不可用时的降级路径。
    */
   async fetchModelCatalog(): Promise<{ providers: string[] }> {
     if (this.llmApi === undefined || typeof this.llmApi.listProviders !== 'function') return { providers: [] }
     try {
-      const [response, namespaces] = await Promise.all([
+      const [response, namespaces, catalog] = await Promise.all([
         this.llmApi.listProviders(),
         this.fetchDiscoveryNamespaces(),
+        this.fetchModelCatalogGroups(),
       ])
+      if (catalog !== null) this.modelCatalog = catalog
       if (response?.ok !== true || !Array.isArray(response.value)) return { providers: [] }
       this.discoveryNamespaces = namespaces
       return {
@@ -188,7 +196,20 @@ class SafeAutoCardController {
     }
   }
 
-  /** 从可配置 provider 目录构建 provider → settingsNs 映射（discoverModels 的第一参数）；目录不可用时返回空映射。 */
+  /** 经 session/modelCatalog 拉取全局模型目录；端点不可用或失败时返回 null（保持上一次目录，下次展开重试）。 */
+  private async fetchModelCatalogGroups(): Promise<any | null> {
+    if (typeof this.sessionApi?.modelCatalog !== 'function') return null
+    try {
+      const response = await this.sessionApi.modelCatalog()
+      return response?.ok === true && response.value !== null && typeof response.value === 'object'
+        ? response.value
+        : null
+    } catch {
+      return null
+    }
+  }
+
+  /** 从可配置 provider 目录构建 provider → settingsNs 映射（discoverModels 降级路径的第一参数）；目录不可用时返回空映射。 */
   private async fetchDiscoveryNamespaces(): Promise<Map<string, string>> {
     const namespaces = new Map<string, string>()
     if (typeof this.llmApi?.listConfigurableProviders !== 'function') return namespaces
@@ -209,16 +230,24 @@ class SafeAutoCardController {
   }
 
   /**
-   * 按 provider 经 llm.discoverModels 拉取模型候选（新目录端点）；旧版宿主无该端点、
-   * provider 无 settingsNs 映射或发现失败时返回空列表——候选仅供快速选择，仍可自由输入。
+   * 按 provider 返回模型候选：主路径从全局模型目录（session/modelCatalog）同步派生，覆盖所有
+   * 已注册路由（含 deepseek 官方与用户自定义 provider）；目录不可用（旧版宿主无该端点）时
+   * 降级 llm.discoverModels 询问端点。候选仅供快速选择，仍可自由输入。
    */
-  async fetchModels(provider: string): Promise<string[]> {
+  fetchModels(provider: string): Promise<string[]> {
     const id = String(provider)
-    if (id === '' || typeof this.llmApi?.discoverModels !== 'function') return []
-    const ns = this.discoveryNamespaces.get(id)
+    if (id === '') return Promise.resolve([])
+    if (this.modelCatalog !== null) return Promise.resolve(modelsFromCatalog(this.modelCatalog, id))
+    return this.fetchModelsByDiscovery(id)
+  }
+
+  /** 降级路径：经 llm.discoverModels 询问端点（依赖 settingsNs 映射与 adapter 注册的发现服务）。 */
+  private async fetchModelsByDiscovery(provider: string): Promise<string[]> {
+    if (typeof this.llmApi?.discoverModels !== 'function') return []
+    const ns = this.discoveryNamespaces.get(provider)
     if (ns === undefined) return []
     try {
-      const response = await this.llmApi.discoverModels(ns, { provider: id })
+      const response = await this.llmApi.discoverModels(ns, { provider })
       if (response?.ok !== true || !Array.isArray(response.value)) return []
       return response.value
         .map((entry: any) => String(entry.id))
@@ -358,17 +387,21 @@ function SafeAutoCard(props: any) {
   const { t } = props
   const state = props.useSafeAutoCard((snapshot: any) => snapshot)
   const [open, setOpen] = useState(false)
+  // 目录就绪版本号：fetchModelCatalog 每次完成后自增，驱动模型候选 effect 重跑。
+  // 否则展开卡片时首个 effect 尚未就绪（模型目录/映射为空），模型候选被清空后不再刷新。
+  const [catalogTick, setCatalogTick] = useState(0)
   const currentProvider = state.classifierProvider?.text ?? ''
   injectCss()
-  // 展开设置卡时经 DSH 宿主目录端点拉取 provider 路由候选（llm.listProviders + listConfigurableProviders），
+  // 展开设置卡时经 DSH 宿主目录端点拉取 provider 路由候选与全局模型目录（session/modelCatalog），
   // 候选仅用于快速选择，仍可自定义输入。
   useEffect(() => {
     if (!open) return
     void props.fetchModelCatalog().then((catalog: { providers: string[] }) => {
       props.setOptions('classifierProvider', catalog.providers)
+      setCatalogTick((tick) => tick + 1)
     })
   }, [open])
-  // provider 变化时经 llm.discoverModels 按需拉取模型候选（带竞态防护：仅应用最后一次结果）；空/未知则清空候选。
+  // provider 变化或目录刷新时按需更新模型候选（带竞态防护：仅应用最后一次结果）；空/未知则清空候选。
   useEffect(() => {
     if (!open) return
     let stale = false
@@ -380,7 +413,7 @@ function SafeAutoCard(props: any) {
       if (!stale) props.setOptions('classifierModel', models)
     })
     return () => { stale = true }
-  }, [open, currentProvider])
+  }, [open, currentProvider, catalogTick])
   if (!state.available) return null
   const disabled = !state.writable
   const blocked = !state.dirty || state.invalid || state.saving
@@ -581,7 +614,7 @@ function TrailPanel(props: any) {
 }
 
 // ==== apply ====
-const inject = ['slots', 'locale', 'connection', 'sessions', 'remote', 'remote.settings', 'remote.llm']
+const inject = ['slots', 'locale', 'connection', 'sessions', 'remote', 'remote.session', 'remote.settings', 'remote.llm']
 
 function apply(ctx: any) {
   injectCss()
@@ -589,13 +622,14 @@ function apply(ctx: any) {
   const t = ctx.locale.bind(SETTINGS_NS)
   // rpc 仅剩审批轨迹面板使用（/autogate trail 端点）；设置卡读写改走官方 settings API。
   const rpc = ctx.connection?.rpc
-  // 复用 DSH 宿主现成的模型目录 API（remote.llm：listProviders / listConfigurableProviders / discoverModels），
-  // 与对话框模型选择器同源；旧版宿主无 discoverModels 时模型候选自动降级为空（仍可自由输入）。
+  // 复用 DSH 宿主现成的模型目录 API（remote.session.modelCatalog 为候选主来源，与对话框模型选择器
+  // 同源；remote.llm：listProviders / discoverModels 提供 provider 路由与降级询问）。
   const llmApi = ctx.remote.llm
+  const sessionApi = ctx.remote.session
   // 设置卡与轨迹浮窗共享同一个 settings 数据源：设置卡保存 showTrail 后，
   // TrailController 经订阅即时启停轮询，无需重新拉取。
   const settingsSource = new ApiSettingsSource(ctx.remote.settings, SETTINGS_NS)
-  const controller = new SafeAutoCardController(settingsSource, llmApi)
+  const controller = new SafeAutoCardController(settingsSource, llmApi, sessionApi)
   // 新版 DSH 中 settings.plugin.item 是 keyed slot：key 即卡片所编辑的 settings
   // namespace（autogate），设置页按 namespace 分发渲染；keyed slot 不再接受 id/order。
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({

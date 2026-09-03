@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import Schema from '@deepseek-ai/schemastery'
-import { ApiSettingsSource, CardForm, TrailController, boolField, en, formatDuration, formatTime, numberField, pairedReset, pairedResetField, selectField, textField, zh } from '../src/client-logic.js'
+import { ApiSettingsSource, CardForm, TrailController, boolField, en, formatDuration, formatTime, modelsFromCatalog, numberField, pairedReset, pairedResetField, selectField, textField, zh } from '../src/client-logic.js'
 
 describe('formatTime', () => {
   it('格式化为本地 HH:MM:SS', () => {
@@ -47,6 +47,39 @@ describe('pairedReset 联动重置', () => {
     const calls: string[] = []
     pairedReset({ resetField: (field: string) => calls.push(field) }, 'preflight')
     expect(calls).toEqual(['preflight'])
+  })
+})
+
+describe('modelsFromCatalog 模型目录派生', () => {
+  const catalog = {
+    default: { provider: 'new-api', model: 'pro' },
+    routableProviders: ['new-api', 'deepseek-official'],
+    groups: [
+      { id: 'new-api', name: 'New API', models: [{ id: 'ultra', name: 'Ultra' }, { id: 'flash', name: 'Flash' }] },
+      { id: 'deepseek-official', name: 'DeepSeek', models: [{ id: 'deepseek-v4-flash' }] },
+    ],
+    failures: [],
+  }
+  it('分组命中 → 返回该 provider 的模型 id 列表（保持声明顺序）', () => {
+    expect(modelsFromCatalog(catalog, 'new-api')).toEqual(['ultra', 'flash'])
+  })
+  it('分组存在但模型为空 → 空列表', () => {
+    expect(modelsFromCatalog({ groups: [{ id: 'empty', name: 'Empty', models: [] }] }, 'empty')).toEqual([])
+  })
+  it('分组缺失（该 provider 目录拉取失败）→ 空列表', () => {
+    expect(modelsFromCatalog(catalog, 'unknown-provider')).toEqual([])
+  })
+  it('目录缺失 / groups 非数组 → 空列表', () => {
+    expect(modelsFromCatalog(null, 'new-api')).toEqual([])
+    expect(modelsFromCatalog(undefined, 'new-api')).toEqual([])
+    expect(modelsFromCatalog({ groups: 'bad' }, 'new-api')).toEqual([])
+  })
+  it('脏数据防御：model 为 null / id 缺失或非字符串 → 过滤', () => {
+    const dirty = { groups: [{ id: 'new-api', models: [null, {}, { id: 'ok' }, { id: 42 }, { id: '' }] }] }
+    expect(modelsFromCatalog(dirty, 'new-api')).toEqual(['ok'])
+  })
+  it('provider 为空串 → 空列表', () => {
+    expect(modelsFromCatalog(catalog, '')).toEqual([])
   })
 })
 

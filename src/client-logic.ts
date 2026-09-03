@@ -112,6 +112,26 @@ export function boolField(field: string) {
   }
 }
 
+// ==== 模型目录派生 ====
+
+/**
+ * 从宿主全局模型目录（session/modelCatalog）按 provider 派生模型 id 候选列表。
+ * 目录形状：{ groups: [{ id, name, models: [{ id, name, ... }] }], routableProviders, failures }；
+ * 防御性解析：目录/分组缺失、字段畸形一律返回空列表——候选仅供快速选择，仍可自由输入。
+ */
+export function modelsFromCatalog(catalog: unknown, provider: string): string[] {
+  const id = String(provider)
+  if (id === '' || catalog === null || typeof catalog !== 'object') return []
+  const groups = (catalog as any).groups
+  if (!Array.isArray(groups)) return []
+  const group = groups.find((candidate: any) =>
+    candidate !== null && typeof candidate === 'object' && String(candidate.id) === id)
+  if (group === undefined || !Array.isArray(group.models)) return []
+  return group.models
+    .map((model: any) => model?.id)
+    .filter((modelId: unknown): modelId is string => typeof modelId === 'string' && modelId !== '')
+}
+
 // ==== CardForm：staged 编辑 + save/discard（参考 dsh-client-ui-settings-plugins） ====
 export class CardForm {
   scope: any
