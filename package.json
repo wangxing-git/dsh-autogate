@@ -1,6 +1,6 @@
 {
   "name": "dsh-autogate",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "DeepSeek Harness 自动审批插件：在 workspace-write 沙箱之上增加 Auto 档——确定性规则放行/拒绝，模糊操作由 LLM 裁决，危险操作转人工。保留工作区沙箱边界，不放宽为 full-access。",
   "keywords": [
     "deepseek",
