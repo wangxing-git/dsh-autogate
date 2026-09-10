@@ -120,6 +120,18 @@ describe('CLASSIFIER_SYSTEM_PROMPT 场景覆盖', () => {
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('do NOT widen it to other listed targets')
     expect(CLASSIFIER_SYSTEM_PROMPT).toContain('do NOT copy a nearby name')
   })
+  it('覆盖「点名文件 + 修正意图」授权延伸到该文件内的常规增删改（含整段删除）', () => {
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('names a concrete FILE')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('DELETING a block of code or configuration')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('new_string is empty')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('IS the fix')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('NOT covered by this rule')
+  })
+  it('覆盖项目内软链接指向同项目文件时按常规项目写入处理', () => {
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('symbolic link INSIDE the project')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('SAME project file')
+    expect(CLASSIFIER_SYSTEM_PROMPT).toContain('NOT by itself a reason to deny')
+  })
 })
 
 describe('createDshClassifier 审查提示词', () => {
