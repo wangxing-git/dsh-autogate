@@ -10,6 +10,8 @@ export type * from './types.js';
 export * from './trail.js';
 export declare const name = "autogate";
 export declare const inject: string[];
+/** 审批轨迹查询端点路径（/api 下经共享通道认证；与 client.tsx 的请求路径保持一致）。 */
+export declare const TRAIL_ENDPOINT = "/api/autogate/trail";
 /** 半自动权限预设键（自动但危险时转人工兜底弹窗；默认档）。 */
 export declare const SEMI_AUTO_PERMISSION_PRESET = "auto-ask";
 /** 全自动权限预设键（LLM 全权裁决，不再人工兜底弹窗）。 */

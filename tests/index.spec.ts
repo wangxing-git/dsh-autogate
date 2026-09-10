@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
-import { apply, autoPermissionAuthority, isAutoPermissionExecution, managedPermissionAuthority } from '../src/index.js'
+import { apply, autoPermissionAuthority, isAutoPermissionExecution, managedPermissionAuthority, TRAIL_ENDPOINT } from '../src/index.js'
 
 /** approval/request 监听器签名（集成测试里以宽松类型捕获）。 */
 type ApprovalListener = (req: any, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>
@@ -14,11 +14,12 @@ function createMockContext(chunks: any[] | null, agentsMap?: Map<string, unknown
   const stream = chunks === null
     ? async function* (options: any) { capturedCalls.push(options); throw new Error('llm down') }
     : async function* (options: any) { capturedCalls.push(options); for (const chunk of chunks) yield chunk }
-  const rpcHandlers = new Map<string, (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<any>>()
+  // 轨迹端点经 connection.fetch 注册精确路由（DSH 0.1.5 起 rpc.handle 注册失效，见 src/index.ts 迁移说明）。
+  const trailRoutes = new Map<string, { path: string; methods: readonly string[]; requestBody: string; fetch: (request: Request) => Promise<Response> }>()
   const connection = {
-    rpc: {
-      handle(channel: string, handler: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<any>) {
-        rpcHandlers.set(channel, handler)
+    fetch: {
+      register(route: { path: string; methods: readonly string[]; requestBody: string; fetch: (request: Request) => Promise<Response> }) {
+        trailRoutes.set(route.path, route)
         return async () => {}
       },
     },
@@ -43,7 +44,14 @@ function createMockContext(chunks: any[] | null, agentsMap?: Map<string, unknown
     // 模拟 cordis ctx.inject：仅对已 mock 提供的 connection 服务就绪时调用 callback；
     // settings 等未 mock 服务视为永不就绪，保持 no-op（installSettingsSection 回退 entry config）。
     inject(names: string[], callback: (injectedCtx: any, config?: any) => any) {
-      if (names.includes('connection')) callback({ ...ctx, connection })
+      if (names.includes('connection')) {
+        // 该注入路径的 effect 与 cordis 一致立即执行一次：注册函数虽为 async，mock 的 register 内部同步落表。
+        const immediateEffect = (cb: () => any) => {
+          const dispose = cb()
+          return () => { if (typeof dispose === 'function') void dispose() }
+        }
+        callback({ ...ctx, connection, effect: immediateEffect })
+      }
       return undefined
     },
     // connection 由 inject 注入的子 ctx 经 get('connection') 读取；其余服务（agents 等）返回 undefined。
@@ -54,7 +62,19 @@ function createMockContext(chunks: any[] | null, agentsMap?: Map<string, unknown
     },
     effect() { return () => {} },
   }
-  return { ctx, listeners, rpcHandlers, capturedCalls, guards, logCalls }
+  return { ctx, listeners, trailRoutes, capturedCalls, guards, logCalls }
+}
+
+/** 以 HTTP 语义调用已注册的轨迹端点（POST + JSON body），返回解析后的响应体。 */
+async function callTrail(routes: Map<string, { fetch: (request: Request) => Promise<Response> }>, payload?: unknown): Promise<any> {
+  const route = routes.get(TRAIL_ENDPOINT)
+  if (route === undefined) throw new Error('trail route not registered: ' + TRAIL_ENDPOINT)
+  const response = await route.fetch(new Request('http://localhost' + TRAIL_ENDPOINT, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload ?? {}),
+  }))
+  return await response.json()
 }
 
 /** Auto 会话的 mock agent（含 provider/model 路由与工作区 cwd）。 */
@@ -362,13 +382,12 @@ describe('apply 注册的工具 ask answerer（approval/request，非 escalation
 
 describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
   it('guard 同步硬 deny 也记录到轨迹（不经过 pre-execute）', async () => {
-    const { ctx, guards, rpcHandlers } = createMockContext(allowChunks)
+    const { ctx, guards, trailRoutes } = createMockContext(allowChunks)
     apply(ctx as any, { preflight: true })
     const exec = { name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-guard-trail', agent: autoAgent(), signal: undefined }
     expect(guards[0](exec as any)).toBe('半自动模式不允许提权')
 
-    const handler = rpcHandlers.get('/autogate')!
-    const result = await handler('trail', undefined, undefined as any)
+    const result = await callTrail(trailRoutes, undefined)
     expect(result.ok).toBe(true)
     const records = (result as any).value
     expect(records).toHaveLength(1)
@@ -377,7 +396,7 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
   })
 
   it('L0 硬 deny 记录到轨迹，RPC trail 端点返回记录（preflight 开启）', async () => {
-    const { ctx, listeners, rpcHandlers } = createMockContext(allowChunks)
+    const { ctx, listeners, trailRoutes } = createMockContext(allowChunks)
     apply(ctx as any, { preflight: true })
     const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
     const exec = {
@@ -390,8 +409,7 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
     const decision = await preExecute(exec, async () => ({ kind: 'allow' }))
     expect(decision).toEqual({ kind: 'deny', reason: expect.stringContaining('[autogate hard deny]') })
 
-    const handler = rpcHandlers.get('/autogate')!
-    const result = await handler('trail', undefined, undefined as any)
+    const result = await callTrail(trailRoutes, undefined)
     expect(result.ok).toBe(true)
     const records = (result as any).value
     expect(records).toHaveLength(1)
@@ -400,7 +418,7 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
   })
 
   it('L0 allow 也记录到轨迹（decision=allow, layer=L0，preflight 开启）', async () => {
-    const { ctx, listeners, rpcHandlers } = createMockContext(allowChunks)
+    const { ctx, listeners, trailRoutes } = createMockContext(allowChunks)
     apply(ctx as any, { preflight: true })
     const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
     const exec = {
@@ -413,8 +431,7 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
     const decision = await preExecute(exec, async () => ({ kind: 'allow' }))
     expect(decision).toEqual({ kind: 'allow' })
 
-    const handler = rpcHandlers.get('/autogate')!
-    const result = await handler('trail', undefined, undefined as any)
+    const result = await callTrail(trailRoutes, undefined)
     const records = (result as any).value
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({ callId: 'call-2', toolName: 'read', decision: 'allow', layer: 'L0' })
@@ -426,7 +443,7 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
       { type: 'usage', usage: { inputTokens: 120, outputTokens: 30, cacheReadTokens: 80 } },
       { type: 'finish', reason: { kind: 'stop' } },
     ]
-    const { ctx, listeners, rpcHandlers } = createMockContext(chunks)
+    const { ctx, listeners, trailRoutes } = createMockContext(chunks)
     apply(ctx as any, { preflight: true })
     const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
     const agent = {
@@ -442,8 +459,7 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
     // unrecognized_tool 无法静态分类，走 L1 LLM 审查。
     await preExecute({ name: 'unrecognized_tool', arguments: { probe: true }, callId: 'call-l1', agent, signal: new AbortController().signal }, async () => ({ kind: 'allow' }))
 
-    const handler = rpcHandlers.get('/autogate')!
-    const result = await handler('trail', undefined, undefined as any)
+    const result = await callTrail(trailRoutes, undefined)
     const records = (result as any).value
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({ callId: 'call-l1', toolName: 'unrecognized_tool', decision: 'allow', layer: 'L1' })
@@ -454,17 +470,16 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
   })
 
   it('trail 按 sessionId 过滤：只返回当前会话的记录', async () => {
-    const { ctx, listeners, rpcHandlers } = createMockContext(allowChunks)
+    const { ctx, listeners, trailRoutes } = createMockContext(allowChunks)
     apply(ctx as any, { preflight: true })
     const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
     await preExecute({ name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-a', agent: agentWithPreset('auto-ask', 'sess-a'), signal: undefined }, async () => ({ kind: 'allow' }))
     await preExecute({ name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-b', agent: agentWithPreset('auto-ask', 'sess-b'), signal: undefined }, async () => ({ kind: 'allow' }))
 
-    const handler = rpcHandlers.get('/autogate')!
-    const all = await handler('trail', undefined, undefined as any)
+    const all = await callTrail(trailRoutes, undefined)
     expect((all as any).value).toHaveLength(2)
 
-    const byA = await handler('trail', { sessionId: 'sess-a' }, undefined as any)
+    const byA = await callTrail(trailRoutes, { sessionId: 'sess-a' })
     expect((byA as any).value).toHaveLength(1)
     expect((byA as any).value[0].callId).toBe('call-a')
     expect((byA as any).value[0].sessionId).toBe('sess-a')
@@ -485,28 +500,29 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
       },
       options: { provider: 'deepseek', model: 'deepseek-chat' },
     }
-    const { ctx, listeners, rpcHandlers } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
+    const { ctx, listeners, trailRoutes } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
     apply(ctx as any, { preflight: true })
     const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
     await preExecute({ name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-child', agent: child, signal: undefined }, async () => ({ kind: 'allow' }))
 
-    const handler = rpcHandlers.get('/autogate')!
-    const byParent = await handler('trail', { sessionId: 'sess-parent' }, undefined as any)
+    const byParent = await callTrail(trailRoutes, { sessionId: 'sess-parent' })
     expect((byParent as any).value).toHaveLength(1)
     expect((byParent as any).value[0]).toMatchObject({ callId: 'call-child', sessionId: 'sess-parent', execSessionId: 'sess-child' })
 
-    const byChild = await handler('trail', { sessionId: 'sess-child' }, undefined as any)
+    const byChild = await callTrail(trailRoutes, { sessionId: 'sess-child' })
     expect((byChild as any).value).toHaveLength(1)
     expect((byChild as any).value[0]).toMatchObject({ callId: 'call-child', sessionId: 'sess-parent', execSessionId: 'sess-child' })
   })
 
-  it('RPC 未知端点返回 internal 错误', async () => {
-    const { ctx, rpcHandlers } = createMockContext(allowChunks)
+  it('轨迹端点按 POST /api/autogate/trail 注册（与客户端请求契约一致）', async () => {
+    const { ctx, trailRoutes } = createMockContext(allowChunks)
     apply(ctx as any)
-    const handler = rpcHandlers.get('/autogate')!
-    const result = await handler('unknown', undefined, undefined as any)
-    expect(result.ok).toBe(false)
-    expect((result as any).error.code).toBe('internal')
+    // 迁移后端点由 connection.fetch 的精确路由承载，路径/方法/请求体模式必须与客户端 fetch 调用一致，
+    // 任一不符都会在运行时表现为 400/404（旧用例的「未知 endpoint」分发语义已随 rpc.handle 一并移除）。
+    const route = trailRoutes.get(TRAIL_ENDPOINT)
+    expect(route).toBeDefined()
+    expect(route!.methods).toContain('POST')
+    expect(route!.requestBody).toBe('buffered')
   })
 })
 
@@ -803,9 +819,9 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
       },
     },
   })
-  // ask_user_question 经 run_code 间接调用时的落盘：tool/code-dispatch 事件（问题在 arguments、回答在 content）。
+  // ask_user_question 经 run_code 间接调用时的落盘：tool/ptc-dispatch 事件（问题在 arguments、回答在 content）。
   const askDispatch = (question: string, options: AskOption[], answer: { selected?: string[]; custom?: string }) => ({
-    type: 'tool/code-dispatch',
+    type: 'tool/ptc-dispatch',
     data: {
       name: 'ask_user_question',
       arguments: {
@@ -833,7 +849,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
     expect(messages[0]).toContain('回答: q1: 是')
   })
 
-  it('经 run_code 间接调用的 ask_user_question（tool/code-dispatch）问答对进入审批上下文', async () => {
+  it('经 run_code 间接调用的 ask_user_question（tool/ptc-dispatch）问答对进入审批上下文', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
     apply(ctx as any, { preflight: true })
     const agent = agentWithEvents([
@@ -977,13 +993,12 @@ describe('全自动模式（auto）：escalation 审批不人工兜底', () => {
   })
 
   it('全自动模式拒绝记录到轨迹（decision=deny, layer=L2）', async () => {
-    const { ctx, listeners, rpcHandlers } = createMockContext(denyChunks)
+    const { ctx, listeners, trailRoutes } = createMockContext(denyChunks)
     apply(ctx as any)
     const answerer = listeners.get('approval/request')![0]
     const next = async (): Promise<ApprovalOutcome> => 'allowed-once'
     await answerer(fullEscReq(), next)
-    const handler = rpcHandlers.get('/autogate')!
-    const result = await handler('trail', undefined, undefined as any)
+    const result = await callTrail(trailRoutes, undefined)
     const records = (result as any).value
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({ toolName: 'bash', decision: 'deny', layer: 'L2' })

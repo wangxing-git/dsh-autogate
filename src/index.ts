@@ -24,21 +24,43 @@ export const name = 'autogate'
 export const inject = ['tools', 'llm']
 
 /**
- * RPC 通道最小契约（运行时由 dsh-client-connection 提供的 connection 服务；
+ * Fetch 路由最小契约（运行时由 dsh-client-connection 提供的 connection 服务；
  * 仅声明本插件用到的形状，避免引入 client 端运行时依赖）。服务端连接服务始终存在，
  * 缺失时（极端环境）跳过轨迹查询端点即可——用 ctx.get 可选读取，不声明 inject。
+ *
+ * 迁移说明：DSH 0.1.5 起 connection.rpc.handle() 内部经 service 自身的 ctx 访问
+ * webServer 注册路由，而 connection 插件只 inject 'credentials'（webServer 不可达），
+ * 该 API 注册必失败（症状：端点 405 / 静默缺失）。官方改用 connection.fetch 的精确
+ * 路由扩展点，本插件同步迁移，与 dsh-tool-session 的事件通道同一模式。
  */
-type TrailRpcResult = { ok: true; value: unknown } | { ok: false; error: { code: string; message: string; details: Record<string, unknown> } }
-type TrailRpcHandler = (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<TrailRpcResult>
-interface TrailRpcHost {
-  handle(channel: string, handler: TrailRpcHandler, options: { authority: 'trusted-host' | 'loopback' }): () => Promise<void>
+interface TrailFetchRoute {
+  path: string
+  methods: readonly ('GET' | 'HEAD' | 'POST')[]
+  /** 请求体呈现模式（DSH 0.1.5 起必填）；本路由只读 JSON，取 buffered。 */
+  requestBody: 'buffered' | 'streaming'
+  fetch: (request: Request) => Promise<Response>
 }
+interface TrailFetchHost {
+  register(route: TrailFetchRoute): () => Promise<void>
+}
+
+/** 审批轨迹查询端点路径（/api 下经共享通道认证；与 client.tsx 的请求路径保持一致）。 */
+export const TRAIL_ENDPOINT = '/api/autogate/trail'
 
 /** 从 trail 查询载荷提取 sessionId（非空字符串）；缺失或非法时返回 undefined，表示不过滤。 */
 function trailSessionId(payload: unknown): string | undefined {
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined
   const value = (payload as Record<string, unknown>).sessionId
   return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+/** 解析轨迹查询请求体（JSON 对象）；空体或非法 JSON 视为不过滤，不因客户端请求格式拒绝服务。 */
+async function readTrailPayload(request: Request): Promise<unknown> {
+  try {
+    return await request.json()
+  } catch {
+    return undefined
+  }
 }
 
 /** 半自动权限预设键（自动但危险时转人工兜底弹窗；默认档）。 */
@@ -290,7 +312,7 @@ function trustedUserMessages(authority: ToolExecution['agent'], limits: Proposal
   let remaining = 4_000
 
   // 第一阶段（从前往后）：建立 ask_user_question 的问答对映射。DSH 中 ask_user_question 经 run_code 间接调用，
-  // 问题与回答一并落在 tool/code-dispatch 事件（arguments 为已解析对象、content 为标准 answers JSON）；
+  // 问题与回答一并落在 tool/ptc-dispatch 事件（arguments 为已解析对象、content 为标准 answers JSON）；
   // 直接调用场景则问题随 tool/call 落盘、回答随 tool/result 落盘，二者按 callId 配对。
   // 同时记录每条直接人类消息紧邻前的 assistant 文本，作为指代消解上下文。
   const askQuestions = new Map<string, string>()
@@ -305,7 +327,7 @@ function trustedUserMessages(authority: ToolExecution['agent'], limits: Proposal
       if (text !== '') askQuestions.set(String(event.data.callId), text)
       continue
     }
-    if (event?.type === 'tool/code-dispatch' && event.data.name === 'ask_user_question') {
+    if (event?.type === 'tool/ptc-dispatch' && event.data.name === 'ask_user_question') {
       const question = askUserQuestionsText(event.data.arguments)
       const answer = askUserAnswerTextFromDispatch(event.data.content)
       if (question !== '' || answer !== '') {
@@ -402,7 +424,7 @@ function assistantMessageText(message: unknown): string {
     .trim()
 }
 
-/** 从 ask_user_question 的调用参数提取问题文本：tool/call 为未解析 JSON 字符串，tool/code-dispatch 为已解析对象。 */
+/** 从 ask_user_question 的调用参数提取问题文本：tool/call 为未解析 JSON 字符串，tool/ptc-dispatch 为已解析对象。 */
 function askUserQuestionsText(rawArguments: unknown): string {
   let parsed: unknown
   if (typeof rawArguments === 'string') {
@@ -472,7 +494,7 @@ function askUserAnswerText(message: unknown): string {
   return askUserAnswerTextFromBlocks((message as Record<string, unknown>).content)
 }
 
-/** 从 ask_user_question 的 tool/code-dispatch 结果 content 提取回答文本。 */
+/** 从 ask_user_question 的 tool/ptc-dispatch 结果 content 提取回答文本。 */
 function askUserAnswerTextFromDispatch(content: unknown): string {
   return askUserAnswerTextFromBlocks(content)
 }
@@ -827,21 +849,29 @@ export function apply(ctx: Context, config: Config = {}): void {
     return next()
   }, { prepend: true })
 
-  // 审批轨迹查询端点：客户端通过 connection.rpc.call('/autogate', 'trail') 拉取。
+  // 审批轨迹查询端点：客户端以 POST /api/autogate/trail（JSON body）拉取。
   // connection 服务由 client-connection 在自身 fiber 中 provide，本插件 apply 时可能尚未激活；
   // 同步 ctx.get 会取到 undefined 导致端点静默缺失，须用 ctx.inject 等待服务就绪后再注册。
   ctx.inject(['connection'], (connCtx) => {
-    const connection = connCtx.get('connection') as { rpc?: TrailRpcHost } | undefined
-    const disposeTrailRpc = connection?.rpc?.handle('/autogate', async (endpoint, payload) => {
-      if (endpoint === 'trail') {
-        const records = trail.snapshot()
-        const sessionId = trailSessionId(payload)
-        return { ok: true, value: sessionId === undefined ? records : records.filter((record) => record.sessionId === sessionId || record.execSessionId === sessionId) }
-      }
-      return { ok: false, error: { code: 'internal', message: 'unknown endpoint: ' + endpoint, details: {} } }
-    }, { authority: 'loopback' })
-    if (disposeTrailRpc !== undefined) {
-      connCtx.effect(() => disposeTrailRpc, 'autogate: trail rpc channel')
-    }
+    const connection = connCtx.get('connection') as { fetch?: TrailFetchHost } | undefined
+    const register = connection?.fetch?.register
+    if (register === undefined) return // 极端环境无 fetch 注册器：跳过轨迹端点
+    connCtx.effect(async () => {
+      const dispose = await register({
+        path: TRAIL_ENDPOINT,
+        methods: ['POST'],
+        requestBody: 'buffered',
+        fetch: async (request) => {
+          const payload = await readTrailPayload(request)
+          const records = trail.snapshot()
+          const sessionId = trailSessionId(payload)
+          return Response.json({
+            ok: true,
+            value: sessionId === undefined ? records : records.filter((record) => record.sessionId === sessionId || record.execSessionId === sessionId),
+          })
+        },
+      })
+      return () => void dispose()
+    }, 'autogate: trail fetch route')
   })
 }

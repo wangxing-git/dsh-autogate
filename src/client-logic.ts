@@ -373,11 +373,29 @@ export class ApiSettingsSource {
   }
 }
 
-// ==== 审批轨迹：RPC 拉取 + 轮询（受 showTrail 配置控制，关闭时不轮询） ====
+// ==== 审批轨迹：HTTP 拉取 + 轮询（受 showTrail 配置控制，关闭时不轮询） ====
+/** 审批轨迹查询端点（/api 下经共享通道认证；与 index.ts 的 TRAIL_ENDPOINT 保持一致）。 */
+export const TRAIL_ENDPOINT = '/api/autogate/trail'
+
+/**
+ * 轨迹拉取器契约：由 client.tsx 注入基于 fetch 的实现（DSH 0.1.5 起 connection.rpc.handle
+ * 注册失效，端点迁移为 HTTP fetch）。测试用同形状的 mock 替换。
+ */
+export interface TrailFetcher {
+  call(namespace: string, method: string, payload: unknown): Promise<unknown>
+}
+
+/** 轨迹端点响应守卫：`{ ok: true, value: [...] }`；形状不符时保持上一份快照。 */
+function isTrailRecords(value: unknown): value is { ok: true; value: unknown[] } {
+  return value !== null && typeof value === 'object'
+    && (value as { ok?: unknown }).ok === true
+    && Array.isArray((value as { value?: unknown }).value)
+}
+
 export class TrailController {
   store: any
   timer: any
-  rpc: any
+  rpc: TrailFetcher
   settings: ApiSettingsSource
   sessions: any
   records: any[] = []
@@ -436,7 +454,7 @@ export class TrailController {
     const payload = this.showAll || this.currentSessionId === undefined ? {} : { sessionId: this.currentSessionId }
     try {
       const result = await this.rpc.call('/autogate', 'trail', payload)
-      if (result !== null && typeof result === 'object' && result.ok === true && Array.isArray(result.value)) {
+      if (isTrailRecords(result)) {
         this.records = result.value
         this.publish()
       }

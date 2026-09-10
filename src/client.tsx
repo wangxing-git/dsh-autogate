@@ -1,6 +1,7 @@
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState } from 'react'
-import { ApiSettingsSource, CardForm, SETTINGS_NS, TrailController, boolField, en, formatDuration, formatTime, modelsFromCatalog, numberField, pairedReset, pairedResetField, selectField, textField, zh } from './client-logic.js'
+import { ApiSettingsSource, CardForm, SETTINGS_NS, TRAIL_ENDPOINT, TrailController, boolField, en, formatDuration, formatTime, modelsFromCatalog, numberField, pairedReset, pairedResetField, selectField, textField, zh } from './client-logic.js'
+import type { TrailFetcher } from './client-logic.js'
 
 // ==== 卡片样式（复用 DSH 主题变量，运行时注入） ====
 const CSS = `.sa_card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;list-style:none}
@@ -620,8 +621,19 @@ function apply(ctx: any) {
   injectCss()
   ctx.effect(() => ctx.locale.register(SETTINGS_NS, { zh, en }), 'autogate: card dictionaries')
   const t = ctx.locale.bind(SETTINGS_NS)
-  // rpc 仅剩审批轨迹面板使用（/autogate trail 端点）；设置卡读写改走官方 settings API。
-  const rpc = ctx.connection?.rpc
+  // 轨迹拉取器：DSH 0.1.5 起 connection.rpc.handle 在服务端注册失效（见 index.ts 迁移说明），
+  // 审批轨迹端点改为 POST /api/autogate/trail 的 HTTP fetch；此处适配成 TrailController 的 call 契约。
+  const trailFetcher: TrailFetcher = {
+    call: async (_namespace: string, _method: string, payload: unknown): Promise<unknown> => {
+      const response = await fetch(TRAIL_ENDPOINT, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload ?? {}),
+      })
+      if (!response.ok) throw new Error('trail request failed: HTTP ' + String(response.status))
+      return await response.json()
+    },
+  }
   // 复用 DSH 宿主现成的模型目录 API（remote.session.modelCatalog 为候选主来源，与对话框模型选择器
   // 同源；remote.llm：listProviders / discoverModels 提供 provider 路由与降级询问）。
   const llmApi = ctx.remote.llm
@@ -639,7 +651,7 @@ function apply(ctx: any) {
     inject: () => controller.inject(),
   }, SafeAutoCard))
 
-  const trailController = new TrailController(rpc, settingsSource, ctx.sessions)
+  const trailController = new TrailController(trailFetcher, settingsSource, ctx.sessions)
   ctx.effect(() => trailController.dispose, 'autogate: trail polling')
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',
