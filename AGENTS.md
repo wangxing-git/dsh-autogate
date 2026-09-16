@@ -72,7 +72,7 @@ lib/               编译产物（由 build 生成并纳入版本控制，勿手
 
 - 新增「危险操作」类别时，确认其落入 L0 硬 deny 还是 L1 分类，并检查脱敏是否覆盖。
 - 新增配置项必须：`z.object` 校验（含 default / min / max / pattern 约束）+ README 文档 + 客户端设置卡。
-- **授权判定只读投影，禁止新增同步事件读取**：`Session.snapshotEvents` / `eventAt` / `ownEvents` 自 DSH 0.1.6 起弃用（官方 agent note `2026-09-09-deprecate-synchronous-session-event-reads`），Session 实现仍保留内存事件序列属过渡态。权限档一律经 `PermissionPresetResolver` 读取（生产实现为 `ctx.sessionProjections.stateOf(session, 'autogatePermission')`，投影单元见 `applyAuthorizationPreset`）。`trustedUserMessages` 与 `toolCallArgumentsFromEvents` 两处的保留调用已各附豁免论证，**不得据此新增同类调用**。
+- **授权判定只读投影，禁止新增同步事件读取**：`Session.snapshotEvents` / `eventAt` / `ownEvents` 自 DSH 0.1.6 起弃用（官方 agent note `2026-09-09-deprecate-synchronous-session-event-reads`），Session 实现仍保留内存事件序列属过渡态。权限档一律经 `PermissionPresetResolver` 读取（生产实现为 `ctx.sessionProjections.stateOf(session, 'autogatePermission')`，投影单元见 `applyAuthorizationPreset`）；工具参数回退走 `session/event` 订阅维护的 `toolCallArguments` 缓存。**全插件仅 `trustedUserMessages` 一处保留同步历史读取**（需问答对跨事件配对与「紧邻前一条 assistant」的邻接关系，非投影可表达），已就地附豁免论证，**不得据此新增同类调用**。
 - **授权投影必须保留 source 语义**：`applyAuthorizationPreset` 跳过 `source === 'autogate'` 的继承标记。改用官方 `permissions` 投影会丢失该区分（官方单元只取 `data.preset`），使子代理会话的继承标记成为授权依据、放宽授权。
 - 轨迹为进程级环形缓冲（默认 200 条），只增不持久化，重启即清空；不得引入持久化副作用。
 - **`approval/request` 监听器必须 `{ prepend: true }` 注册**：本插件 bundle 的 `insert` 无锚点、落在 api-gateway（dsh-host-apiproxy）之后加载，不 prepend 则被 host-apiproxy 的 UI answerer 抢先 claim，LLM 预审（L2）永不执行。

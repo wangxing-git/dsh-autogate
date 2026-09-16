@@ -86,5 +86,11 @@ export declare function managedPermissionAuthority(agent: ToolExecution['agent']
     agent: NonNullable<ToolExecution['agent']>;
     mode: ManagedMode;
 } | undefined;
+/**
+ * 把一条 tool/call 事件折进参数缓存：事件里的 arguments 是模型产出的未解析 JSON 字符串，
+ * 解析后按 callId 存放（与 pendingApprovalArgs 的值形态一致，供分类器直接使用）。
+ * 非字符串或非法 JSON 一律不缓存——读取侧会回落到 reason 兜底。
+ */
+export declare function rememberToolCallArguments(cache: Map<string, unknown>, event: SessionEvent): void;
 /** 安装自动权限策略到官方工具流水线。 */
 export declare function apply(ctx: Context, config?: Config): void;

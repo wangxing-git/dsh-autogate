@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
-import { apply, applyAuthorizationPreset, autoPermissionAuthority, isAutoPermissionExecution, managedPermissionAuthority, TRAIL_ENDPOINT, type PermissionPresetResolver } from '../src/index.js'
+import { apply, applyAuthorizationPreset, autoPermissionAuthority, isAutoPermissionExecution, managedPermissionAuthority, rememberToolCallArguments, TRAIL_ENDPOINT, type PermissionPresetResolver } from '../src/index.js'
 import { createSessionProjections } from './session-projection-stub.js'
 
 /** approval/request 监听器签名（集成测试里以宽松类型捕获）。 */
@@ -224,30 +224,47 @@ describe('apply 注册的 escalation answerer（approval/request）', () => {
     expect(lastInput.arguments.content).toBe('<untrusted>[redacted-content:5-chars]</untrusted>')
   })
 
-  it('子代理审批：缓存未命中时回退读**执行会话**（req.agent）的 tool/call 参数', async () => {
+  it('子代理审批：pendingApprovalArgs 未命中时从 session/event 参数缓存取回（跨会话命中）', async () => {
     const parentId = 'sess-auto-parent'
     // 授权会话（顶层 Auto）：事件里没有本次工具调用。
     const parent = {
       session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary', cwd: '/ws', id: parentId } },
       options: { provider: 'deepseek', model: 'deepseek-chat' },
     }
-    const childEvents = [
-      // 子代理会话由插件补写的继承标记（授权解析须跳过，沿链回到 parent）。
-      { type: 'permission/preset', data: { preset: 'auto-ask', source: 'autogate' } },
-      // 工具调用已落盘：pre-execute 监听器被短路 → pendingApprovalArgs 未缓存 → 只能回退读事件。
-      { type: 'tool/call', data: { callId: 'call-child', name: 'write', arguments: '{"file_path":"/etc/hosts","content":"x","sandbox_permissions":"danger-full-access","justification":"探针"}' } },
-    ]
+    // 执行会话（子代理）：自身只带插件补写的继承标记，授权解析须沿链回到 parent。
     const child = {
-      session: { snapshotEvents: () => childEvents, header: { origin: 'subagent', parentSession: parentId, cwd: '/ws', id: 'sess-child' } },
+      session: {
+        snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask', source: 'autogate' } }],
+        header: { origin: 'subagent', parentSession: parentId, cwd: '/ws', id: 'sess-child' },
+      },
       options: { provider: 'deepseek', model: 'deepseek-chat' },
     }
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks, new Map([[parentId, parent]]))
     apply(ctx as any)
+    // tool/call 事件落盘（pre-execute 监听器被短路 → pendingApprovalArgs 未缓存，只能走回退）。
+    const onSessionEvent = listeners.get('session/event')![0] as unknown as (session: any, event: any) => void
+    onSessionEvent(child.session, {
+      type: 'tool/call',
+      data: { callId: 'call-child', name: 'write', arguments: '{"file_path":"/etc/hosts","content":"x","sandbox_permissions":"danger-full-access","justification":"探针"}' },
+    })
     const answerer = listeners.get('approval/request')![0]
     const req = { agent: child, toolName: 'write', callId: 'call-child', reason: 'escalate sandbox to danger-full-access: 探针', signal: undefined }
     await answerer(req, async (): Promise<ApprovalOutcome> => 'rejected')
     const lastInput = JSON.parse(capturedCalls[capturedCalls.length - 1].messages[0].content[0].text)
     expect(lastInput.arguments.file_path).toBe('<untrusted>/etc/hosts</untrusted>')
+  })
+
+  it('参数缓存无该 callId 时回落 reason 兜底（不误用其它调用的参数）', async () => {
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
+    apply(ctx as any)
+    const onSessionEvent = listeners.get('session/event')![0] as unknown as (session: any, event: any) => void
+    onSessionEvent(autoAgent().session, { type: 'tool/call', data: { callId: 'call-other', name: 'write', arguments: '{"file_path":"/etc/passwd"}' } })
+    const answerer = listeners.get('approval/request')![0]
+    const req = { agent: autoAgent(), toolName: 'write', callId: 'call-missing', reason: 'escalate sandbox to danger-full-access: 探针', signal: undefined }
+    await answerer(req, async (): Promise<ApprovalOutcome> => 'rejected')
+    const lastInput = JSON.parse(capturedCalls[capturedCalls.length - 1].messages[0].content[0].text)
+    expect(lastInput.arguments.file_path).toBeUndefined()
+    expect(lastInput.arguments.reason).toContain('探针')
   })
 
   it('escalation 分类器收到原始工具参数（bash command），而非仅 justification', async () => {
@@ -383,22 +400,17 @@ describe('apply 注册的工具 ask answerer（approval/request，非 escalation
     expect(lastInput.policyReason).not.toContain('supersecretvalue')
   })
 
-  it('工具 ask 审批 pre-execute 未缓存时从会话事件取回参数（覆盖 pre-execute 被短路路径）', async () => {
+  it('工具 ask 审批 pre-execute 未缓存时从 session/event 参数缓存取回参数（覆盖 pre-execute 被短路路径）', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
     apply(ctx as any)
+    // 工具调用已落盘（session/event 在 append 内同步派发），但本插件 pre-execute 未缓存参数（被更早注册的监听器短路）。
+    const onSessionEvent = listeners.get('session/event')![0] as unknown as (session: any, event: any) => void
+    onSessionEvent(autoAgent().session, {
+      type: 'tool/call',
+      data: { callId: 'call-ask-from-events', name: 'write', arguments: JSON.stringify({ file_path: '/ws/from-events.txt', content: 'hello' }) },
+    })
     const answerer = listeners.get('approval/request')![0]
-    // 构造带 tool/call 事件的 agent：工具调用已落盘，但本插件 pre-execute 未缓存参数（被更早注册的监听器短路）。
-    const agent = {
-      session: {
-        snapshotEvents: () => [
-          { type: 'permission/preset', data: { preset: 'auto-ask' } },
-          { type: 'tool/call', data: { callId: 'call-ask-from-events', name: 'write', arguments: JSON.stringify({ file_path: '/ws/from-events.txt', content: 'hello' }) } },
-        ],
-        header: { cwd: '/ws' },
-      },
-      options: { provider: 'deepseek', model: 'deepseek-chat' },
-    }
-    const req = { agent, toolName: 'write', callId: 'call-ask-from-events', reason: '写入工作区文件需确认', signal: undefined }
+    const req = { agent: autoAgent(), toolName: 'write', callId: 'call-ask-from-events', reason: '写入工作区文件需确认', signal: undefined }
     const next = async (): Promise<ApprovalOutcome> => 'rejected'
     expect(await answerer(req, next)).toBe('allowed-once')
     const lastInput = JSON.parse(capturedCalls[capturedCalls.length - 1].messages[0].content[0].text)
@@ -649,6 +661,34 @@ describe('applyAuthorizationPreset（授权投影单元的单事件转移）', (
   })
   it('其它预设名（非 Auto 档）同样被记录', () => {
     expect(fold([presetEvent('auto-full'), presetEvent('read-only')])).toBe('read-only')
+  })
+})
+
+describe('rememberToolCallArguments（tool/call 参数缓存）', () => {
+  const callEvent = (callId: string, args: unknown) => ({ type: 'tool/call', data: { callId, name: 'write', arguments: args } })
+  const fold = (events: unknown[]): Map<string, unknown> => {
+    const cache = new Map<string, unknown>()
+    for (const event of events) rememberToolCallArguments(cache, event as never)
+    return cache
+  }
+
+  it('缓存解析后的参数（事件里是模型产出的未解析 JSON 字符串）', () => {
+    expect(fold([callEvent('c1', '{"file_path":"/etc/hosts"}')]).get('c1')).toEqual({ file_path: '/etc/hosts' })
+  })
+  it('非 tool/call 事件不入缓存', () => {
+    expect(fold([{ type: 'user/message', data: {} }, { type: 'approval/policy', data: { policy: 'ask' } }]).size).toBe(0)
+  })
+  it('arguments 非字符串或缺失时不入缓存', () => {
+    expect(fold([callEvent('c1', { file_path: '/etc/hosts' }), callEvent('c2', undefined)]).size).toBe(0)
+  })
+  it('非法 JSON 不入缓存（读取侧回落 reason 兜底）', () => {
+    expect(fold([callEvent('c1', '{不是 JSON')]).size).toBe(0)
+  })
+  it('超过容量上限时淘汰最旧条目并保留最新', () => {
+    const cache = fold(Array.from({ length: 101 }, (_, i) => callEvent('c' + i, '{"n":' + i + '}')))
+    expect(cache.size).toBe(100)
+    expect(cache.has('c0')).toBe(false)
+    expect(cache.get('c100')).toEqual({ n: 100 })
   })
 })
 
