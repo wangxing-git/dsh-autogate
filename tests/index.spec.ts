@@ -171,7 +171,7 @@ describe('apply 注册的 escalation answerer（approval/request）', () => {
     const answerer = listeners.get('approval/request')![0]
     const noRouteAgent = {
       session: {
-        snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto' } }],
+        snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full' } }],
         header: { cwd: '/ws' },
       },
     }
@@ -292,7 +292,7 @@ describe('apply 注册的工具 ask answerer（approval/request，非 escalation
     const answerer = listeners.get('approval/request')![0]
     let nextCalled = false
     const next = async (): Promise<ApprovalOutcome> => { nextCalled = true; return 'allowed-once' }
-    const req = { agent: agentWithPreset('auto'), toolName: 'write', reason: '删除生产数据库', signal: undefined }
+    const req = { agent: agentWithPreset('auto-full'), toolName: 'write', reason: '删除生产数据库', signal: undefined }
     expect(await answerer(req, next)).toBe('rejected')
     expect(nextCalled).toBe(false)
   })
@@ -573,14 +573,14 @@ describe('preflight 开关（沙盒前拦截判断）', () => {
     const { ctx, guards } = createMockContext(allowChunks)
     apply(ctx as any)
     const semi = { name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-mode-semi', agent: agentWithPreset('auto-ask'), signal: undefined }
-    const full = { name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-mode-full', agent: agentWithPreset('auto'), signal: undefined }
+    const full = { name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-mode-full', agent: agentWithPreset('auto-full'), signal: undefined }
     expect(guards[0](semi as any)).toBe('半自动模式不允许提权')
     expect(guards[0](full as any)).toBe('全自动模式不允许提权')
   })
 })
 
 describe('autoPermissionAuthority 与 isAutoPermissionExecution', () => {
-  const autoEvents = () => [{ type: 'permission/preset', data: { preset: 'auto' } }]
+  const autoEvents = () => [{ type: 'permission/preset', data: { preset: 'auto-full' } }]
   const neverEvents = () => [{ type: 'permission/preset', data: { preset: 'never' } }]
 
   it('isAutoPermissionExecution 识别 Auto 预设', () => {
@@ -611,14 +611,14 @@ describe('autoPermissionAuthority 与 isAutoPermissionExecution', () => {
   })
   it('subagent 自身带继承标记（source=autogate）不直接命中，仍沿链返回顶层 Auto', () => {
     const parent = { session: { snapshotEvents: () => autoEvents(), header: { origin: 'primary', cwd: '/ws' } } }
-    const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto', source: 'autogate' } }], header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
+    const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full', source: 'autogate' } }], header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
     const lookup = (id: unknown) => (id === 'p1' ? parent : undefined)
     const exec = { name: 'bash', arguments: {}, agent: child }
     expect(isAutoPermissionExecution(exec as any)).toBe(false)
     expect(autoPermissionAuthority(exec as any, lookup)).toBe(parent)
   })
   it('subagent 用户手动切换的 preset（无 source）直接命中自身', () => {
-    const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto' } }], header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
+    const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full' } }], header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
     const exec = { name: 'bash', arguments: {}, agent: child }
     expect(isAutoPermissionExecution(exec as any)).toBe(true)
     expect(autoPermissionAuthority(exec as any, () => undefined)).toBe(child)
@@ -959,7 +959,7 @@ describe('preflight 开启时 LLM 异常 fail-closed', () => {
 })
 
 describe('全自动模式（auto）：escalation 审批不人工兜底', () => {
-  const fullAutoAgent = () => agentWithPreset('auto')
+  const fullAutoAgent = () => agentWithPreset('auto-full')
   const fullEscReq = () => escalationReq(fullAutoAgent())
 
   it('LLM 判 allow → allowed-once（直接批准）', async () => {
@@ -1011,7 +1011,7 @@ describe('managedPermissionAuthority', () => {
     expect(managedPermissionAuthority(agent as any, () => undefined)).toEqual({ agent, mode: 'semi-auto' })
   })
   it('识别全自动（auto）预设', () => {
-    const agent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto' } }] } }
+    const agent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full' } }] } }
     expect(managedPermissionAuthority(agent as any, () => undefined)).toEqual({ agent, mode: 'full-auto' })
   })
   it('未命中（read-only）返回 undefined', () => {
@@ -1019,7 +1019,7 @@ describe('managedPermissionAuthority', () => {
     expect(managedPermissionAuthority(agent as any, () => undefined)).toBeUndefined()
   })
   it('subagent 沿 parentSession 链继承全自动模式', () => {
-    const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto' } }], header: { origin: 'primary' } } }
+    const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full' } }], header: { origin: 'primary' } } }
     const child = { session: { snapshotEvents: () => [], header: { origin: 'subagent', parentSession: 'p1' } } }
     const lookup = (id: unknown) => (id === 'p1' ? parent : undefined)
     expect(managedPermissionAuthority(child as any, lookup as any)).toEqual({ agent: parent, mode: 'full-auto' })
@@ -1028,8 +1028,8 @@ describe('managedPermissionAuthority', () => {
     expect(managedPermissionAuthority(undefined as any, () => undefined)).toBeUndefined()
   })
   it('subagent 自身带继承标记（source=autogate）→ 跳过自身，authority 仍是父会话', () => {
-    const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto' } }], header: { origin: 'primary' } } }
-    const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto', source: 'autogate' } }], header: { origin: 'subagent', parentSession: 'p1' } } }
+    const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full' } }], header: { origin: 'primary' } } }
+    const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full', source: 'autogate' } }], header: { origin: 'subagent', parentSession: 'p1' } } }
     const lookup = (id: unknown) => (id === 'p1' ? parent : undefined)
     expect(managedPermissionAuthority(child as any, lookup as any)).toEqual({ agent: parent, mode: 'full-auto' })
   })
@@ -1064,14 +1064,14 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
     ])
   })
   it('全自动父会话的子代理 → 继承 preset=auto', () => {
-    const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto' } }], header: { origin: 'primary' } } }
+    const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full' } }], header: { origin: 'primary' } } }
     const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
     apply(ctx as any)
     const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
     const { appended, session } = makeSession('subagent', 'sess-parent')
     listener(session)
     expect(appended).toEqual([
-      ['permission/preset', { preset: 'auto', source: 'autogate' }],
+      ['permission/preset', { preset: 'auto-full', source: 'autogate' }],
       ['approval/policy', { policy: 'ask' }],
     ])
   })

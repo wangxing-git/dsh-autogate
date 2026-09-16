@@ -38,7 +38,7 @@ tests/            与 src 模块一一对应的 *.spec.ts
 scripts/
   build-client.mjs   客户端 bundle 构建脚本
   fix-session-zstd.py 会话 zstd 修复脚本
-cordis.patch.yml   权限预设表（插入 auto 档，sandbox=workspace-write）
+cordis.patch.yml   权限预设表（插入 auto-ask 半自动 + auto-full 全自动档，sandbox=workspace-write）
 lib/               编译产物（由 build 生成并纳入版本控制，勿手改）
 ```
 
@@ -74,4 +74,4 @@ lib/               编译产物（由 build 生成并纳入版本控制，勿手
 - 新增配置项必须：`z.object` 校验（含 default / min / max / pattern 约束）+ README 文档 + 客户端设置卡。
 - 轨迹为进程级环形缓冲（默认 200 条），只增不持久化，重启即清空；不得引入持久化副作用。
 - **`approval/request` 监听器必须 `{ prepend: true }` 注册**：本插件 bundle 的 `insert` 无锚点、落在 api-gateway（dsh-host-apiproxy）之后加载，不 prepend 则被 host-apiproxy 的 UI answerer 抢先 claim，LLM 预审（L2）永不执行。
-- 对 `cordis.patch.yml` 的修改仅限权限预设与插件注册段，保持 auto 档 `sandbox: workspace-write`。
+- 对 `cordis.patch.yml` 的修改仅限权限预设与插件注册段，保持 auto-full 档 `sandbox: workspace-write`。

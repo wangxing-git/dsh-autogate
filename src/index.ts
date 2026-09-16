@@ -66,8 +66,13 @@ async function readTrailPayload(request: Request): Promise<unknown> {
 /** 半自动权限预设键（自动但危险时转人工兜底弹窗；默认档）。 */
 export const SEMI_AUTO_PERMISSION_PRESET = 'auto-ask'
 
-/** 全自动权限预设键（LLM 全权裁决，不再人工兜底弹窗）。 */
-export const AUTO_PERMISSION_PRESET = 'auto'
+/**
+ * 全自动权限预设键（LLM 全权裁决，不再人工兜底弹窗）。
+ * 0.1.6 起官方把 `auto` 收作实验性 Auto review 模式的保留名（执行包为
+ * `danger-full-access` + `approval: never`，与本档语义相反），presets 表里
+ * 出现同名键会直接抛错，故本档改用 `auto-full`。
+ */
+export const AUTO_PERMISSION_PRESET = 'auto-full'
 
 /** 宿主策略配置。 */
 export interface Config {
@@ -96,7 +101,7 @@ export interface Config {
   readonly preflight?: boolean
   /** 审批轨迹浮窗开关（默认显示）：关闭则不显示右下角浮窗，且客户端停止轮询轨迹接口。 */
   readonly showTrail?: boolean
-  /** 全自动权限预设键（默认 auto）：该预设下审批不再人工弹窗，LLM 裁决为最终决定。 */
+  /** 全自动权限预设键（默认 auto-full）：该预设下审批不再人工弹窗，LLM 裁决为最终决定。 */
   readonly fullAutoPresetName?: string
 }
 
@@ -118,7 +123,7 @@ export const Config: z<Config> = z.object({
   proposalContextMaxTotalChars: z.natural().default(2_000).min(64).max(8_000).description('AI 提议上下文总预算（字符）；默认 2000'),
   preflight: z.boolean().default(false).description('沙盒前拦截判断开关：开启执行确定性规则与 LLM 分类，关闭则完全依赖沙盒策略（硬 deny 与提权审批不受影响）'),
   showTrail: z.boolean().default(true).description('审批轨迹浮窗开关：默认显示；关闭则不显示浮窗且客户端停止轮询轨迹接口'),
-  fullAutoPresetName: z.string().default(AUTO_PERMISSION_PRESET).description('全自动权限预设键（默认 auto）：该预设下审批不再人工弹窗，LLM 裁决为最终决定'),
+  fullAutoPresetName: z.string().default(AUTO_PERMISSION_PRESET).description('全自动权限预设键（默认 auto-full）：该预设下审批不再人工弹窗，LLM 裁决为最终决定'),
 })
 
 /**

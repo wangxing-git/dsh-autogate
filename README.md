@@ -25,13 +25,13 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 | 预设键 | 模式 | escalation 提权审批兜底 |
 | --- | --- | --- |
 | `auto-ask` | 半自动（默认） | LLM 拒绝/异常 → 委派人工弹窗（L2 兜底） |
-| `auto` | 全自动 | LLM 拒绝/异常 → 直接拒绝，不人工弹窗（LLM 裁决为最终决定） |
+| `auto-full` | 全自动 | LLM 拒绝/异常 → 直接拒绝，不人工弹窗（LLM 裁决为最终决定） |
 
 两种模式共享同一套 L0 确定性规则与 L1 LLM 分类器，唯一区别是 **L2 人工兜底**：半自动保留人工弹窗，全自动把 LLM 裁决作为最终决定。硬 deny（L0 guard）与 `preflight` 开关在两种模式下行为一致。
 
 ### 子代理继承
 
-子代理（subagent）创建时继承父会话的托管档：父会话处于 `auto-ask` 或 `auto` 时，子代理会话的权限档与父一致（DSH 默认给子代理 pin `approval=never` 且不写权限档事件，本插件补写继承标记并放开为 ask）。
+子代理（subagent）创建时继承父会话的托管档：父会话处于 `auto-ask` 或 `auto-full` 时，子代理会话的权限档与父一致（DSH 默认给子代理 pin `approval=never` 且不写权限档事件，本插件补写继承标记并放开为 ask）。
 
 - **权限档投影**：子代理会话补写 `permission/preset` 继承标记（`source: autogate`），UI 显示与父会话相同的 Auto 档，而非「工作区读写」；该标记只影响显示，不作为授权依据。
 - **授权依据锚定顶层**：子代理触发的一切 L0/L1/L2 审批，其授权依据（最近的直接人类消息与问答授权）始终取沿 parentSession 链向上找到的顶层 Auto 会话，避免无直接人类消息的子代理会话被误当作授权来源。
@@ -58,7 +58,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 - L1 LLM 分类器是启发式的，可能误判（放行危险操作或拒绝安全操作）。fail-closed 减少误放行，但无法消除。
 - 提示词注入防御（脱敏 + `<untrusted>`/`<user-authority>` 标签隔离 + anti-injection 条款）是软防御，可抬高注入门槛但无法彻底消除；硬保证仍靠 L0 确定性规则与 workspace-write 沙箱兜底。
 - 静态路径检查（含 symlink realpath 加固）仍存在 TOCTOU 窗口：符号链接可能在检查通过后、写入前被重新指向。
-- **全自动（`auto`）模式**下 LLM 裁决为最终决定、不再人工弹窗——仅在可信环境使用。
+- **全自动（`auto-full`）模式**下 LLM 裁决为最终决定、不再人工弹窗——仅在可信环境使用。
 - 你对每一次被批准操作的最终效果负责。请查看审批轨迹，存疑时优先使用半自动（`auto-ask`）。
 - **L2 escalation 路径是一次性放宽**：LLM 批准沙箱提权后，那一次调用以请求的更宽沙箱（通常 full-access）运行，而非 workspace-write。它不影响其他调用，但确实是一次真实的临时扩权——不要把「沙箱保持 workspace-write」理解为覆盖提权。
 
@@ -81,7 +81,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
       preflight: false                 # 沙盒前拦截判断开关：true 执行确定性规则+LLM 分类，false（默认）完全依赖沙盒
       showTrail: true                  # 审批轨迹浮窗开关：false 隐藏右下角浮窗并停止轮询轨迹接口（默认显示）
       presetName: auto-ask             # 半自动模式预设键（默认 auto-ask）：LLM 拒绝后转人工兜底弹窗
-      fullAutoPresetName: auto         # 全自动模式预设键（默认 auto）：LLM 裁决为最终决定，不再人工弹窗
+      fullAutoPresetName: auto-full         # 全自动模式预设键（默认 auto-full）：LLM 裁决为最终决定，不再人工弹窗
       classifierTimeoutMs: 8000        # 分类器超时（100–60000ms），超时 fail-closed
       classifierMaxOutputTokens: 1024  # 分类器输出上限（64–4096）
       classifierRetry: true            # 分类器输出解析失败时静默重试一次（默认开启）
@@ -115,7 +115,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
    b. 用 bash/pwsh 的 sandbox_permissions + justification 重试，走 DSH 内建沙箱提权（escalation）——合理越界（用户明确授权）直接批准不弹窗，且那一次调用随后以请求的更宽沙箱（通常 full-access）运行；危险/不确定才人工弹窗；
    c. 工具/插件自身声明需要审批（pre-execute 返回 ask）的调用——本插件同样先过 LLM 判断：合理直接批准不弹窗，危险/不确定才人工弹窗。
 
-   **全自动 `auto` 模式**：审批请求（escalation 提权 + 工具自身 ask）由 LLM 裁决为最终决定——allow 直接批准，deny / 分类器异常直接拒绝，不再人工弹窗。
+   **全自动 `auto-full` 模式**：审批请求（escalation 提权 + 工具自身 ask）由 LLM 裁决为最终决定——allow 直接批准，deny / 分类器异常直接拒绝，不再人工弹窗。
 
 ## 审批轨迹 UI
 

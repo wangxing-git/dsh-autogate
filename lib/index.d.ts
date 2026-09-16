@@ -14,8 +14,13 @@ export declare const inject: string[];
 export declare const TRAIL_ENDPOINT = "/api/autogate/trail";
 /** 半自动权限预设键（自动但危险时转人工兜底弹窗；默认档）。 */
 export declare const SEMI_AUTO_PERMISSION_PRESET = "auto-ask";
-/** 全自动权限预设键（LLM 全权裁决，不再人工兜底弹窗）。 */
-export declare const AUTO_PERMISSION_PRESET = "auto";
+/**
+ * 全自动权限预设键（LLM 全权裁决，不再人工兜底弹窗）。
+ * 0.1.6 起官方把 `auto` 收作实验性 Auto review 模式的保留名（执行包为
+ * `danger-full-access` + `approval: never`，与本档语义相反），presets 表里
+ * 出现同名键会直接抛错，故本档改用 `auto-full`。
+ */
+export declare const AUTO_PERMISSION_PRESET = "auto-full";
 /** 宿主策略配置。 */
 export interface Config {
     /** 半自动权限预设键（默认 auto-ask）：危险操作转人工兜底弹窗。 */
@@ -43,7 +48,7 @@ export interface Config {
     readonly preflight?: boolean;
     /** 审批轨迹浮窗开关（默认显示）：关闭则不显示右下角浮窗，且客户端停止轮询轨迹接口。 */
     readonly showTrail?: boolean;
-    /** 全自动权限预设键（默认 auto）：该预设下审批不再人工弹窗，LLM 裁决为最终决定。 */
+    /** 全自动权限预设键（默认 auto-full）：该预设下审批不再人工弹窗，LLM 裁决为最终决定。 */
     readonly fullAutoPresetName?: string;
 }
 export declare const Config: z<Config>;

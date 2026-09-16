@@ -12,7 +12,9 @@
         approval: ask
         name: Auto Ask
         description: 半自动审批：保留 workspace-write 沙箱，确定性规则放行/拒绝，模糊操作由 LLM 裁决，危险操作转人工兜底弹窗。
-      auto:
+      # 键名用 auto-full：0.1.6 起官方把 `auto` 收作实验性 Auto review 保留名
+      # （sandbox=danger-full-access + approval=never），注册同名键会直接抛错。
+      auto-full:
         sandbox: workspace-write
         approval: ask
         name: Auto
