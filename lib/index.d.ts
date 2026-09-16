@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
 import type { ToolExecution } from '@deepseek-ai/dsh-tools';
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session';
 import type { ManagedMode } from './types.js';
 export * from './paths.js';
 export * from './policy.js';
@@ -52,8 +53,26 @@ export interface Config {
     readonly fullAutoPresetName?: string;
 }
 export declare const Config: z<Config>;
-/** 当前会话是否使用 Auto 权限预设。 */
-export declare function isAutoPermissionExecution(exec: Readonly<ToolExecution>, presetName?: string): boolean;
+declare module '@deepseek-ai/dsh-session-projection/types' {
+    interface SessionProjectionStateMap {
+        /** 最近一次用户真实切换（非 {@link INHERITED_PRESET_SOURCE} 继承标记）的权限预设名；无则为 null。 */
+        autogatePermission: string | null;
+    }
+}
+/**
+ * 授权投影单元的单事件转移：记录最近一次「用户真实切换」的权限预设名。
+ *
+ * 跳过本插件写入的继承标记（source 为 {@link INHERITED_PRESET_SOURCE}）：它只让子代理
+ * 会话的权限档投影与父会话一致（UI 显示），不构成用户授权。与事件无关时返回**同一引用**
+ * ——注册表以 `Object.is` 判定状态变化，同引用不产生下游工作。
+ */
+export declare function applyAuthorizationPreset(state: string | null, event: SessionEvent): string | null;
+/**
+ * 解析一个会话的授权预设：读本插件的授权投影，key 未注册或注册表未挂载时返回 undefined。
+ * 未命中一律 fail-closed（调用方视作「非托管 Auto」，不授予任何自动审批）。 */
+export type PermissionPresetResolver = (session: Session) => string | undefined;
+/** 当前会话是否使用 Auto 权限预设（授权依据取自 `resolvePreset`，不读同步事件历史）。 */
+export declare function isAutoPermissionExecution(exec: Readonly<ToolExecution>, resolvePreset: PermissionPresetResolver, presetName?: string): boolean;
 type ParentSessionId = NonNullable<NonNullable<ToolExecution['agent']>['session']['header']['parentSession']>;
 type ParentAgentLookup = (sessionId: ParentSessionId) => ToolExecution['agent'] | undefined;
 /**
@@ -61,9 +80,9 @@ type ParentAgentLookup = (sessionId: ParentSessionId) => ToolExecution['agent'] 
  * DSH 把子代理 approval pin 到 never，因此沿 durable parentSession 链继承 Auto，
  * 否则子代理的工具调用会在 Auto 会话中被一刀切拒绝。
  */
-export declare function autoPermissionAuthority(exec: Readonly<ToolExecution>, parentAgent: ParentAgentLookup, presetName?: string): ToolExecution['agent'] | undefined;
+export declare function autoPermissionAuthority(exec: Readonly<ToolExecution>, parentAgent: ParentAgentLookup, resolvePreset: PermissionPresetResolver, presetName?: string): ToolExecution['agent'] | undefined;
 /** 沿 durable parentSession 链解析执行所属的托管权限：返回授权 agent 与模式，未命中返回 undefined。 */
-export declare function managedPermissionAuthority(agent: ToolExecution['agent'], parentAgent: ParentAgentLookup, semiPreset?: string, fullPreset?: string): {
+export declare function managedPermissionAuthority(agent: ToolExecution['agent'], parentAgent: ParentAgentLookup, resolvePreset: PermissionPresetResolver, semiPreset?: string, fullPreset?: string): {
     agent: NonNullable<ToolExecution['agent']>;
     mode: ManagedMode;
 } | undefined;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import { apply, Config } from '../src/index.js'
+import { createSessionProjections } from './session-projection-stub.js'
 
 type ApprovalListener = (req: any, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>
 
@@ -36,6 +37,7 @@ function createContext(settingsResolved?: () => Record<string, unknown>) {
   const settingsCallbacks: ((sctx: any) => void)[] = []
   const registered: { ns: unknown; opts: any }[] = []
   const watchers: (() => void)[] = []
+  const sessionProjections = createSessionProjections()
 
   const ctx: any = {
     fiber: { state: 0 },
@@ -59,6 +61,11 @@ function createContext(settingsResolved?: () => Record<string, unknown>) {
       if (deps.includes('connection')) {
         // RPC 注册非本测试关注点：提供最小 ctx，让回调静默完成（get 返回 undefined → 不注册端点）。
         cb({ get: () => undefined, effect: () => () => {} })
+        return undefined
+      }
+      if (deps.includes('sessionProjections')) {
+        // 授权投影注册（非本测试关注点）：提供替身让授权判定按 mock 会话的事件序列正常求值。
+        cb({ sessionProjections, effect: () => () => {} })
         return undefined
       }
       return undefined

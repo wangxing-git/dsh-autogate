@@ -1,9 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
-import { apply, autoPermissionAuthority, isAutoPermissionExecution, managedPermissionAuthority, TRAIL_ENDPOINT } from '../src/index.js'
+import { apply, applyAuthorizationPreset, autoPermissionAuthority, isAutoPermissionExecution, managedPermissionAuthority, TRAIL_ENDPOINT, type PermissionPresetResolver } from '../src/index.js'
+import { createSessionProjections } from './session-projection-stub.js'
 
 /** approval/request 监听器签名（集成测试里以宽松类型捕获）。 */
 type ApprovalListener = (req: any, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>
+
+/**
+ * 授权 resolver 的测试替身：把 mock 会话上挂的事件序列按投影单元语义（applyAuthorizationPreset）折叠成授权档。
+ * 生产代码走 ctx.sessionProjections.stateOf 读同一语义的投影状态；测试直接折叠事件数组，
+ * 免于为每个 mock 会话搭建投影注册表。测试文件读取事件序列属官方 policy 允许的豁免。
+ */
+const resolvePreset: PermissionPresetResolver = (session) => {
+  const source = (session as unknown as { snapshotEvents?: () => readonly unknown[] }).snapshotEvents
+  let state: string | null = null
+  for (const event of source?.() ?? []) state = applyAuthorizationPreset(state, event as never)
+  return state ?? undefined
+}
 
 /** 构造最小可用的 mock Context，捕获各类事件监听器。agentsMap 可选：提供 parentSession → agent 的查找，用于子代理归属测试。 */
 function createMockContext(chunks: any[] | null, agentsMap?: Map<string, unknown>) {
@@ -24,6 +37,8 @@ function createMockContext(chunks: any[] | null, agentsMap?: Map<string, unknown
       },
     },
   }
+  // 会话投影注册表替身：让集成测试走真实的「ctx.inject(['sessionProjections']) → register → stateOf」路径。
+  const sessionProjections = createSessionProjections()
   const ctx = {
     on(event: string, listener: ApprovalListener, options?: { prepend?: boolean }) {
       if (!listeners.has(event)) listeners.set(event, [])
@@ -41,17 +56,16 @@ function createMockContext(chunks: any[] | null, agentsMap?: Map<string, unknown
       info() {},
       debug() {},
     },
-    // 模拟 cordis ctx.inject：仅对已 mock 提供的 connection 服务就绪时调用 callback；
+    // 模拟 cordis ctx.inject：仅对已 mock 提供的服务（connection / sessionProjections）就绪时调用 callback；
     // settings 等未 mock 服务视为永不就绪，保持 no-op（installSettingsSection 回退 entry config）。
     inject(names: string[], callback: (injectedCtx: any, config?: any) => any) {
-      if (names.includes('connection')) {
-        // 该注入路径的 effect 与 cordis 一致立即执行一次：注册函数虽为 async，mock 的 register 内部同步落表。
-        const immediateEffect = (cb: () => any) => {
-          const dispose = cb()
-          return () => { if (typeof dispose === 'function') void dispose() }
-        }
-        callback({ ...ctx, connection, effect: immediateEffect })
+      // 该注入路径的 effect 与 cordis 一致立即执行一次：注册函数虽为 async，mock 的 register 内部同步落表。
+      const immediateEffect = (cb: () => any) => {
+        const dispose = cb()
+        return () => { if (typeof dispose === 'function') void dispose() }
       }
+      if (names.includes('connection')) callback({ ...ctx, connection, effect: immediateEffect })
+      if (names.includes('sessionProjections')) callback({ ...ctx, sessionProjections, effect: immediateEffect })
       return undefined
     },
     // connection 由 inject 注入的子 ctx 经 get('connection') 读取；其余服务（agents 等）返回 undefined。
@@ -579,56 +593,89 @@ describe('preflight 开关（沙盒前拦截判断）', () => {
   })
 })
 
+describe('applyAuthorizationPreset（授权投影单元的单事件转移）', () => {
+  const presetEvent = (preset: string, source?: string) => ({ type: 'permission/preset', data: source === undefined ? { preset } : { preset, source } })
+  const fold = (events: unknown[]): string | null => {
+    let state: string | null = null
+    for (const event of events) state = applyAuthorizationPreset(state, event as never)
+    return state
+  }
+
+  it('用户真实切换把状态推进到该预设', () => {
+    expect(fold([presetEvent('auto-full')])).toBe('auto-full')
+  })
+  it('继承标记（source=autogate）不改变状态：空状态保持 null', () => {
+    expect(fold([presetEvent('auto-full', 'autogate')])).toBeNull()
+  })
+  it('继承标记落在已有状态上不覆盖（子代理会话补写的场景）', () => {
+    expect(fold([presetEvent('auto-ask'), presetEvent('auto-full', 'autogate')])).toBe('auto-ask')
+  })
+  it('真实切换在继承标记之后仍生效', () => {
+    expect(fold([presetEvent('auto-full', 'autogate'), presetEvent('auto-ask')])).toBe('auto-ask')
+  })
+  it('连续多次切换取最后一次', () => {
+    expect(fold([presetEvent('read-only'), presetEvent('auto-ask'), presetEvent('auto-full')])).toBe('auto-full')
+  })
+  it('无关事件返回同一引用（注册表以 Object.is 判定状态变化，同引用不产生下游工作）', () => {
+    const state = 'auto-full'
+    expect(applyAuthorizationPreset(state, { type: 'user/message', data: {} } as never)).toBe(state)
+    expect(applyAuthorizationPreset(null, { type: 'user/message', data: {} } as never)).toBeNull()
+  })
+  it('其它预设名（非 Auto 档）同样被记录', () => {
+    expect(fold([presetEvent('auto-full'), presetEvent('read-only')])).toBe('read-only')
+  })
+})
+
 describe('autoPermissionAuthority 与 isAutoPermissionExecution', () => {
   const autoEvents = () => [{ type: 'permission/preset', data: { preset: 'auto-full' } }]
   const neverEvents = () => [{ type: 'permission/preset', data: { preset: 'never' } }]
 
   it('isAutoPermissionExecution 识别 Auto 预设', () => {
     const exec = { agent: { session: { snapshotEvents: () => autoEvents() } } }
-    expect(isAutoPermissionExecution(exec as any)).toBe(true)
+    expect(isAutoPermissionExecution(exec as any, resolvePreset)).toBe(true)
   })
   it('isAutoPermissionExecution 拒绝非 Auto / 空 events / 无 agent', () => {
-    expect(isAutoPermissionExecution({ agent: { session: { snapshotEvents: () => neverEvents() } } } as any)).toBe(false)
-    expect(isAutoPermissionExecution({ agent: { session: { snapshotEvents: () => [] } } } as any)).toBe(false)
-    expect(isAutoPermissionExecution({} as any)).toBe(false)
+    expect(isAutoPermissionExecution({ agent: { session: { snapshotEvents: () => neverEvents() } } } as any, resolvePreset)).toBe(false)
+    expect(isAutoPermissionExecution({ agent: { session: { snapshotEvents: () => [] } } } as any, resolvePreset)).toBe(false)
+    expect(isAutoPermissionExecution({} as any, resolvePreset)).toBe(false)
   })
   it('顶层 Auto 会话直接返回自身 agent', () => {
     const agent = { session: { snapshotEvents: () => autoEvents(), header: { origin: 'primary', cwd: '/ws' } } }
     const exec = { name: 'bash', arguments: {}, agent }
-    expect(autoPermissionAuthority(exec as any, () => undefined)).toBe(agent)
+    expect(autoPermissionAuthority(exec as any, () => undefined, resolvePreset)).toBe(agent)
   })
   it('subagent 沿 parentSession 链继承 Auto', () => {
     const parent = { session: { snapshotEvents: () => autoEvents(), header: { origin: 'primary', cwd: '/ws' } } }
     const child = { session: { snapshotEvents: () => neverEvents(), header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
     const lookup = (id: unknown) => (id === 'p1' ? parent : undefined)
     const exec = { name: 'bash', arguments: {}, agent: child }
-    expect(autoPermissionAuthority(exec as any, lookup)).toBe(parent)
+    expect(autoPermissionAuthority(exec as any, lookup, resolvePreset)).toBe(parent)
   })
   it('parent 缺失返回 undefined', () => {
     const child = { session: { snapshotEvents: () => neverEvents(), header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
     const exec = { name: 'bash', arguments: {}, agent: child }
-    expect(autoPermissionAuthority(exec as any, () => undefined)).toBeUndefined()
+    expect(autoPermissionAuthority(exec as any, () => undefined, resolvePreset)).toBeUndefined()
   })
   it('subagent 自身带继承标记（source=autogate）不直接命中，仍沿链返回顶层 Auto', () => {
     const parent = { session: { snapshotEvents: () => autoEvents(), header: { origin: 'primary', cwd: '/ws' } } }
     const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full', source: 'autogate' } }], header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
     const lookup = (id: unknown) => (id === 'p1' ? parent : undefined)
     const exec = { name: 'bash', arguments: {}, agent: child }
-    expect(isAutoPermissionExecution(exec as any)).toBe(false)
-    expect(autoPermissionAuthority(exec as any, lookup)).toBe(parent)
+    expect(isAutoPermissionExecution(exec as any, resolvePreset)).toBe(false)
+    expect(autoPermissionAuthority(exec as any, lookup, resolvePreset)).toBe(parent)
   })
   it('subagent 用户手动切换的 preset（无 source）直接命中自身', () => {
     const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full' } }], header: { origin: 'subagent', parentSession: 'p1', cwd: '/ws' } } }
     const exec = { name: 'bash', arguments: {}, agent: child }
-    expect(isAutoPermissionExecution(exec as any)).toBe(true)
-    expect(autoPermissionAuthority(exec as any, () => undefined)).toBe(child)
+    expect(isAutoPermissionExecution(exec as any, resolvePreset)).toBe(true)
+    expect(autoPermissionAuthority(exec as any, () => undefined, resolvePreset)).toBe(child)
   })
   it('循环 parentSession 返回 undefined', () => {
     const a = { session: { snapshotEvents: () => neverEvents(), header: { origin: 'subagent', parentSession: 'b' } } }
     const b = { session: { snapshotEvents: () => neverEvents(), header: { origin: 'subagent', parentSession: 'a' } } }
     const lookup = (id: unknown) => (id === 'a' ? a : id === 'b' ? b : undefined)
     const exec = { name: 'bash', arguments: {}, agent: a }
-    expect(autoPermissionAuthority(exec as any, lookup)).toBeUndefined()
+    expect(autoPermissionAuthority(exec as any, lookup, resolvePreset)).toBeUndefined()
   })
 })
 
@@ -1008,34 +1055,34 @@ describe('全自动模式（auto）：escalation 审批不人工兜底', () => {
 describe('managedPermissionAuthority', () => {
   it('识别半自动（auto-ask）预设', () => {
     const agent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }] } }
-    expect(managedPermissionAuthority(agent as any, () => undefined)).toEqual({ agent, mode: 'semi-auto' })
+    expect(managedPermissionAuthority(agent as any, () => undefined, resolvePreset)).toEqual({ agent, mode: 'semi-auto' })
   })
   it('识别全自动（auto）预设', () => {
     const agent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full' } }] } }
-    expect(managedPermissionAuthority(agent as any, () => undefined)).toEqual({ agent, mode: 'full-auto' })
+    expect(managedPermissionAuthority(agent as any, () => undefined, resolvePreset)).toEqual({ agent, mode: 'full-auto' })
   })
   it('未命中（read-only）返回 undefined', () => {
     const agent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'read-only' } }] } }
-    expect(managedPermissionAuthority(agent as any, () => undefined)).toBeUndefined()
+    expect(managedPermissionAuthority(agent as any, () => undefined, resolvePreset)).toBeUndefined()
   })
   it('subagent 沿 parentSession 链继承全自动模式', () => {
     const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full' } }], header: { origin: 'primary' } } }
     const child = { session: { snapshotEvents: () => [], header: { origin: 'subagent', parentSession: 'p1' } } }
     const lookup = (id: unknown) => (id === 'p1' ? parent : undefined)
-    expect(managedPermissionAuthority(child as any, lookup as any)).toEqual({ agent: parent, mode: 'full-auto' })
+    expect(managedPermissionAuthority(child as any, lookup as any, resolvePreset)).toEqual({ agent: parent, mode: 'full-auto' })
   })
   it('无 agent 返回 undefined', () => {
-    expect(managedPermissionAuthority(undefined as any, () => undefined)).toBeUndefined()
+    expect(managedPermissionAuthority(undefined as any, () => undefined, resolvePreset)).toBeUndefined()
   })
   it('subagent 自身带继承标记（source=autogate）→ 跳过自身，authority 仍是父会话', () => {
     const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full' } }], header: { origin: 'primary' } } }
     const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full', source: 'autogate' } }], header: { origin: 'subagent', parentSession: 'p1' } } }
     const lookup = (id: unknown) => (id === 'p1' ? parent : undefined)
-    expect(managedPermissionAuthority(child as any, lookup as any)).toEqual({ agent: parent, mode: 'full-auto' })
+    expect(managedPermissionAuthority(child as any, lookup as any, resolvePreset)).toEqual({ agent: parent, mode: 'full-auto' })
   })
   it('subagent 用户手动切换的 preset（无 source）→ 自身成为授权会话', () => {
     const child = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'subagent', parentSession: 'p1' } } }
-    expect(managedPermissionAuthority(child as any, () => undefined)).toEqual({ agent: child, mode: 'semi-auto' })
+    expect(managedPermissionAuthority(child as any, () => undefined, resolvePreset)).toEqual({ agent: child, mode: 'semi-auto' })
   })
 })
 
@@ -1210,6 +1257,7 @@ function createLocaleContext() {
   const streamCalls: any[] = []
   const settingsCallbacks: ((sctx: any) => void)[] = []
   const localeListeners: ((ns: unknown) => void)[] = []
+  const sessionProjections = createSessionProjections()
   let localeValue: { preference?: string } = { preference: 'zh' }
   const stream = async function* (options: any) {
     streamCalls.push(options)
@@ -1232,6 +1280,7 @@ function createLocaleContext() {
     inject(deps: string[], cb: (sctx: any) => void) {
       if (deps.includes('settings')) { settingsCallbacks.push(cb); return undefined }
       if (deps.includes('connection')) { cb({ get: () => undefined, effect: () => () => {} }); return undefined }
+      if (deps.includes('sessionProjections')) { cb({ sessionProjections, effect: () => () => {} }); return undefined }
       return undefined
     },
     effect() { return () => {} },

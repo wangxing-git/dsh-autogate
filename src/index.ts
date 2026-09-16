@@ -1,14 +1,18 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { z as zod } from 'zod'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { CLASSIFIER_SYSTEM_PROMPT, createDshClassifier, createHttpClassifier, extractEscalationJustification, isEscalationApprovalReason, sanitizeClassifierArguments, sanitizeClassifierText, sanitizeClassifierTextTail } from './classifier.js'
 import { resolveRoots, type RootOptions } from './paths.js'
 import { assessTool, hardDenyReason, isSandboxEscalationRetry, summarizeToolArguments } from './policy.js'
 import { setApprovalPolicy, type ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-settings'
 // 引入 declaration merging：'permission/preset' 事件类型由 dsh-permission-presets 扩展到 SessionEventMap。
 import type {} from '@deepseek-ai/dsh-permission-presets'
+// 引入 declaration merging：ctx.sessionProjections 服务与 SessionProjectionStateMap（本插件的授权投影 key）。
+import type {} from '@deepseek-ai/dsh-session-projection'
 import type { ClassifierInput, ClassifierTokenUsage, ManagedMode, SafetyClassifier } from './types.js'
 import { createApprovalTrail, type ApprovalDecision, type ApprovalLayer } from './trail.js'
 import type { UiLocale } from './i18n.js'
@@ -134,23 +138,55 @@ export const Config: z<Config> = z.object({
  */
 const INHERITED_PRESET_SOURCE = 'autogate'
 
-/** 从会话事件倒序解析最近一次 permission/preset 选择（对齐 dsh-permission-presets 的投影语义）。
- *  跳过继承标记（source 为 INHERITED_PRESET_SOURCE）：它只影响显示，不能成为授权依据；
- *  用户手动切换写入的 preset 无该 source，正常解析。 */
-function effectivePermissionPreset(events: readonly unknown[]): string | undefined {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index] as { type?: unknown; data?: { preset?: unknown; source?: unknown } }
-    if (event.type !== 'permission/preset' || typeof event.data?.preset !== 'string') continue
-    if (event.data.source === INHERITED_PRESET_SOURCE) continue
-    return event.data.preset
+/**
+ * 授权投影单元 key：本插件自有的**宿主专用**投影（不进客户端快照），
+ * 状态为「最近一次用户真实切换的权限预设名」。
+ *
+ * 为什么不直接用官方的 `permissions` 投影：官方单元对 `permission/preset` 只取
+ * `data.preset`，不区分 source——autogate 写入的继承标记会覆盖其 preset 值，
+ * 直接用于授权判定会把子代理会话误判为 Auto 档（放宽授权）。故自持一份**保留
+ * source 语义**的投影，授权依据仍锚定顶层 Auto 会话。
+ */
+const AUTHORIZATION_PROJECTION_KEY = 'autogatePermission'
+
+declare module '@deepseek-ai/dsh-session-projection/types' {
+  interface SessionProjectionStateMap {
+    /** 最近一次用户真实切换（非 {@link INHERITED_PRESET_SOURCE} 继承标记）的权限预设名；无则为 null。 */
+    autogatePermission: string | null
   }
-  return undefined
 }
 
-/** 当前会话是否使用 Auto 权限预设。 */
-export function isAutoPermissionExecution(exec: Readonly<ToolExecution>, presetName = AUTO_PERMISSION_PRESET): boolean {
-  const events = exec.agent?.session.snapshotEvents()
-  return events !== undefined && effectivePermissionPreset(events) === presetName
+/** 状态 schema：投影缓存反序列化时的校验（非法持久化状态被拒，回落到全量重放）。
+ *  会话投影的 stateSchema 契约为 zod（dsh-session-projection 的 ZodType），与插件配置用的 schemastery 不同源。 */
+const authorizationPresetSchema = zod.union([zod.string(), zod.null()])
+
+/**
+ * 授权投影单元的单事件转移：记录最近一次「用户真实切换」的权限预设名。
+ *
+ * 跳过本插件写入的继承标记（source 为 {@link INHERITED_PRESET_SOURCE}）：它只让子代理
+ * 会话的权限档投影与父会话一致（UI 显示），不构成用户授权。与事件无关时返回**同一引用**
+ * ——注册表以 `Object.is` 判定状态变化，同引用不产生下游工作。
+ */
+export function applyAuthorizationPreset(state: string | null, event: SessionEvent): string | null {
+  if (event.type !== 'permission/preset') return state
+  // source 是插件自有扩展字段，SessionEventMap 未声明（见 writeInheritedPreset）。
+  const data = event.data as { preset: string; source?: unknown }
+  return data.source === INHERITED_PRESET_SOURCE ? state : data.preset
+}
+
+/**
+ * 解析一个会话的授权预设：读本插件的授权投影，key 未注册或注册表未挂载时返回 undefined。
+ * 未命中一律 fail-closed（调用方视作「非托管 Auto」，不授予任何自动审批）。 */
+export type PermissionPresetResolver = (session: Session) => string | undefined
+
+/** 当前会话是否使用 Auto 权限预设（授权依据取自 `resolvePreset`，不读同步事件历史）。 */
+export function isAutoPermissionExecution(
+  exec: Readonly<ToolExecution>,
+  resolvePreset: PermissionPresetResolver,
+  presetName = AUTO_PERMISSION_PRESET,
+): boolean {
+  const session = exec.agent?.session
+  return session !== undefined && resolvePreset(session) === presetName
 }
 
 type ParentSessionId = NonNullable<NonNullable<ToolExecution['agent']>['session']['header']['parentSession']>
@@ -164,9 +200,10 @@ type ParentAgentLookup = (sessionId: ParentSessionId) => ToolExecution['agent'] 
 export function autoPermissionAuthority(
   exec: Readonly<ToolExecution>,
   parentAgent: ParentAgentLookup,
+  resolvePreset: PermissionPresetResolver,
   presetName = AUTO_PERMISSION_PRESET,
 ): ToolExecution['agent'] | undefined {
-  if (isAutoPermissionExecution(exec, presetName)) return exec.agent
+  if (isAutoPermissionExecution(exec, resolvePreset, presetName)) return exec.agent
   let session = exec.agent?.session
   const visited = new Set<string>()
   while (session?.header?.origin === 'subagent' && session.header.parentSession !== undefined) {
@@ -177,7 +214,7 @@ export function autoPermissionAuthority(
     const parent = parentAgent(parentSessionId)
     if (parent === undefined) return undefined
     const parentExec = { ...exec, agent: parent }
-    if (isAutoPermissionExecution(parentExec, presetName)) return parent
+    if (isAutoPermissionExecution(parentExec, resolvePreset, presetName)) return parent
     session = parent.session
   }
   return undefined
@@ -187,13 +224,14 @@ export function autoPermissionAuthority(
 export function managedPermissionAuthority(
   agent: ToolExecution['agent'],
   parentAgent: ParentAgentLookup,
+  resolvePreset: PermissionPresetResolver,
   semiPreset = SEMI_AUTO_PERMISSION_PRESET,
   fullPreset = AUTO_PERMISSION_PRESET,
 ): { agent: NonNullable<ToolExecution['agent']>; mode: ManagedMode } | undefined {
   const modeOf = (target: ToolExecution['agent']): ManagedMode | undefined => {
-    const events = target?.session.snapshotEvents()
-    if (events === undefined) return undefined
-    const preset = effectivePermissionPreset(events)
+    const session = target?.session
+    if (session === undefined) return undefined
+    const preset = resolvePreset(session)
     if (preset === semiPreset) return 'semi-auto'
     if (preset === fullPreset) return 'full-auto'
     return undefined
@@ -312,6 +350,20 @@ interface ProposalContextLimits {
   maxTotalChars: number
 }
 
+/**
+ * 取最近若干条「直接人类消息」及其指代消解上下文（AI 提议文本），作为分类器的唯一授权依据。
+ *
+ * 豁免说明（DSH 0.1.6 起 Session.snapshotEvents 等同步事件读取弃用，见官方 agent note
+ * `2026-09-09-deprecate-synchronous-session-event-reads`）：本函数需要**完整历史序列**而非投影状态——
+ * ① 授权依据是「最近的直接人类消息」，须在全量序列上倒序筛选；
+ * ② ask_user_question 的问答对按 callId 跨事件配对（问题在 tool/call、回答在 tool/result），
+ *    间接调用时则整段落在一处 tool/ptc-dispatch，二者都需要回看事件记录；
+ * ③ 指代消解上下文是「紧邻前一条 assistant 文本」，属事件间的**邻接关系**，任何「当前值」投影都无法表达。
+ * 官方 note 承认此类 genuinely-need-complete-history 的操作仍需历史读（其显式存储读路径尚未提供）；
+ * 且本函数收集的是原始对话文本，迁入投影会使其落进投影缓存、构成持久化副作用，同样不可取。
+ *
+ * 该豁免仅限本函数：不得据此新增其它同步历史读取调用。
+ */
 function trustedUserMessages(authority: ToolExecution['agent'], limits: ProposalContextLimits): { messages: string[]; contexts: string[] } {
   if (authority === undefined) return { messages: [], contexts: [] }
   let remaining = 4_000
@@ -529,6 +581,11 @@ function formatAskUserAnswers(answers: unknown[]): string {
  * 工具自身声明需要审批（pre-execute 返回 ask）时，若 autogate 的 pre-execute 监听器被更早注册的
  * 监听器短路而未执行，pendingApprovalArgs 里没有缓存——此时 tool/call 事件已在派发前落盘，
  * 从会话事件取回参数仍能让分类器评估具体目标，而非只凭 reason 猜测。
+ *
+ * 豁免说明（DSH 0.1.6 起 Session.snapshotEvents 弃用）：本函数按 callId 回溯**单条事件记录本身**，
+ * 而非某个可折叠的当前值；改用投影则需缓存 callId→arguments 映射——状态随会话无界增长，
+ * 且会把工具原始参数（命令原文、文件路径等）写进持久化投影缓存，违反本插件不引入持久化副作用的约束。
+ * 该豁免仅限本函数：不得据此新增其它同步历史读取调用。
  */
 function toolCallArgumentsFromEvents(agent: ToolExecution['agent'], callId: string): unknown {
   if (agent === undefined || callId === '') return undefined
@@ -617,7 +674,22 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   const rootsFor = (exec: Readonly<ToolExecution>) => resolveRoots(exec.agent?.session.header.cwd, rootOptions)
   const parentAgent: ParentAgentLookup = sessionId => ctx.get('agents')?.get(sessionId)
-  const authorityFor = (exec: Readonly<ToolExecution>) => managedPermissionAuthority(exec.agent, parentAgent, presetName, fullAutoPresetName)
+  // 授权预设解析：读本插件自注的授权投影（applyAuthorizationPreset）——DSH 0.1.6 起
+  // 同步事件读取（Session.snapshotEvents/eventAt/ownEvents）已弃用，授权判定改走投影。
+  // 注册表未挂载或 key 未注册时恒为 undefined：未命中即 fail-closed，不授予任何自动审批。
+  let resolvePreset: PermissionPresetResolver = () => undefined
+  ctx.inject(['sessionProjections'], (pctx) => {
+    pctx.sessionProjections.register({
+      key: AUTHORIZATION_PROJECTION_KEY,
+      stateVersion: 1,
+      stateSchema: authorizationPresetSchema,
+      init: () => null,
+      apply: applyAuthorizationPreset,
+    })
+    resolvePreset = session => pctx.sessionProjections.stateOf(session, AUTHORIZATION_PROJECTION_KEY) ?? undefined
+  })
+  const authorityOf = (target: ToolExecution['agent']) => managedPermissionAuthority(target, parentAgent, resolvePreset, presetName, fullAutoPresetName)
+  const authorityFor = (exec: Readonly<ToolExecution>) => authorityOf(exec.agent)
 
   // 子代理被 DSH 硬编码 approval=never（dsh-subagent 的 appendDelegatedPolicyOverrides），其提权请求会在
   // approval/request 事件触发前被 decide() 短路拒绝，LLM 终审收不到。对「父会话是托管 Auto」的子代理把
@@ -637,7 +709,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       return
     }
     // 沿 parentSession 链判断是否存在托管 Auto 祖先（含父自身也是子代理的多级链）。
-    const authority = managedPermissionAuthority(parent, parentAgent, presetName, fullAutoPresetName)
+    const authority = authorityOf(parent)
     if (authority === undefined) {
       // 父会话非托管 Auto；保持 DSH 默认 never。
       ctx.logger.debug('autogate: 子代理父会话非托管 Auto，保持默认 never')
@@ -646,7 +718,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     // 继承父链的托管权限档：DSH 的子代理 delegation 只携带 sandbox override 与 approval=never，
     // 不带 permission/preset——若不补写，子代理的权限档投影按 sandbox=workspace-write + approval=ask
     // 推导为「工作区读写」档而非父会话的 Auto 档。带 source 继承标记补写 permission/preset，
-    // 只影响投影显示；授权解析（effectivePermissionPreset）跳过该标记，授权依据仍锚定顶层 Auto 会话。
+    // 只影响投影显示；授权解析（applyAuthorizationPreset / resolvePreset）跳过该标记，授权依据仍锚定顶层 Auto 会话。
     // source 是插件自有扩展字段，SessionEventMap 未声明；运行时 dsh-permission-presets 的投影
     // 只读 data.preset、忽略其余字段，带 source 不影响投影。
     session.append('permission/preset', {
@@ -796,7 +868,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   // 而 host-apiproxy 的 approval/request answerer 总是先 claim（弹窗）——不 prepend 则本插件的 LLM 预审
   // 永远排在其后、不被调用。必须抢在所有 UI answerer 之前先过 LLM。
   ctx.on('approval/request', async (req, next): Promise<ApprovalOutcome> => {
-    const authority = managedPermissionAuthority(req.agent, parentAgent, presetName, fullAutoPresetName)
+    const authority = authorityOf(req.agent)
     if (authority === undefined) return next()
     const mode = authority.mode
     // 子代理（origin=subagent）无可靠人工弹窗通道：其一切审批（沙箱提权 + 工具自身 ask）LLM 终审拒绝即拒绝，不转人工兜底。
