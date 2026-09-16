@@ -224,6 +224,32 @@ describe('apply 注册的 escalation answerer（approval/request）', () => {
     expect(lastInput.arguments.content).toBe('<untrusted>[redacted-content:5-chars]</untrusted>')
   })
 
+  it('子代理审批：缓存未命中时回退读**执行会话**（req.agent）的 tool/call 参数', async () => {
+    const parentId = 'sess-auto-parent'
+    // 授权会话（顶层 Auto）：事件里没有本次工具调用。
+    const parent = {
+      session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary', cwd: '/ws', id: parentId } },
+      options: { provider: 'deepseek', model: 'deepseek-chat' },
+    }
+    const childEvents = [
+      // 子代理会话由插件补写的继承标记（授权解析须跳过，沿链回到 parent）。
+      { type: 'permission/preset', data: { preset: 'auto-ask', source: 'autogate' } },
+      // 工具调用已落盘：pre-execute 监听器被短路 → pendingApprovalArgs 未缓存 → 只能回退读事件。
+      { type: 'tool/call', data: { callId: 'call-child', name: 'write', arguments: '{"file_path":"/etc/hosts","content":"x","sandbox_permissions":"danger-full-access","justification":"探针"}' } },
+    ]
+    const child = {
+      session: { snapshotEvents: () => childEvents, header: { origin: 'subagent', parentSession: parentId, cwd: '/ws', id: 'sess-child' } },
+      options: { provider: 'deepseek', model: 'deepseek-chat' },
+    }
+    const { ctx, listeners, capturedCalls } = createMockContext(allowChunks, new Map([[parentId, parent]]))
+    apply(ctx as any)
+    const answerer = listeners.get('approval/request')![0]
+    const req = { agent: child, toolName: 'write', callId: 'call-child', reason: 'escalate sandbox to danger-full-access: 探针', signal: undefined }
+    await answerer(req, async (): Promise<ApprovalOutcome> => 'rejected')
+    const lastInput = JSON.parse(capturedCalls[capturedCalls.length - 1].messages[0].content[0].text)
+    expect(lastInput.arguments.file_path).toBe('<untrusted>/etc/hosts</untrusted>')
+  })
+
   it('escalation 分类器收到原始工具参数（bash command），而非仅 justification', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
     apply(ctx as any)
