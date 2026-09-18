@@ -1,20 +1,13 @@
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef, useState } from 'react'
-import { ApiSettingsSource, CardForm, SETTINGS_NS, TRAIL_ENDPOINT, TrailController, boolField, en, formatDuration, formatTime, modelsFromCatalog, numberField, pairedReset, pairedResetField, selectField, textField, zh } from './client-logic.js'
+import { ApiSettingsSource, BUNDLE_CONFIG_SLOT, BUNDLE_PACKAGE_NAME, CardForm, SETTINGS_NS, TRAIL_ENDPOINT, TrailController, boolField, en, formatDuration, formatTime, modelsFromCatalog, numberField, pairedReset, pairedResetField, selectField, textField, zh } from './client-logic.js'
 import type { TrailFetcher } from './client-logic.js'
 
 // ==== 卡片样式（复用 DSH 主题变量，运行时注入） ====
-const CSS = `.sa_card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;list-style:none}
-.sa_card:hover{border-color:var(--dsw-alias-label-dimmed)}
-.sa_header{appearance:none;width:100%;font:inherit;color:inherit;text-align:left;cursor:pointer;background:0 0;border:0;border-radius:12px;align-items:center;gap:12px;padding:14px 16px;display:flex}
-.sa_headText{flex-direction:column;flex:1;gap:4px;min-width:0;display:flex}
-.sa_name{color:var(--dsw-alias-label-primary);font-size:15px;font-weight:600;line-height:1.4}
-.sa_desc{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:1.5}
+const CSS = `.sa_form{flex-direction:column;display:flex}
+.sa_formHead{justify-content:space-between;align-items:center;gap:8px;display:flex;padding-bottom:4px}
 .sa_pending{white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);border-radius:999px;flex:none;padding:1px 8px;font-size:11px;font-weight:500;line-height:17px}
-.sa_chevron{color:var(--dsw-alias-label-tertiary);flex:none;transition:transform .16s}
-.sa_chevronOpen{transform:rotate(180deg)}
-.sa_body{border-top:1px solid var(--dsw-alias-border-l2);margin:0 16px;padding-bottom:8px}
-.sa_readOnly{color:var(--dsw-alias-label-tertiary);margin:12px 0 0;font-size:12px;line-height:1.5}
+.sa_readOnly{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:1.5}
 .sa_field{flex-direction:column;gap:6px;padding:12px 0;display:flex}
 .sa_field+.sa_field{border-top:1px solid var(--dsw-alias-border-l2)}
 .sa_label{min-width:0;color:var(--dsw-alias-label-primary);flex:1;font-size:13px;font-weight:500;line-height:1.5}
@@ -385,26 +378,23 @@ function ComboInput(props: any) {
 }
 
 function SafeAutoCard(props: any) {
-  const { t } = props
+  const { t, view } = props
   const state = props.useSafeAutoCard((snapshot: any) => snapshot)
-  const [open, setOpen] = useState(false)
   // 目录就绪版本号：fetchModelCatalog 每次完成后自增，驱动模型候选 effect 重跑。
-  // 否则展开卡片时首个 effect 尚未就绪（模型目录/映射为空），模型候选被清空后不再刷新。
+  // 否则首个 effect 尚未就绪（模型目录/映射为空），模型候选被清空后不再刷新。
   const [catalogTick, setCatalogTick] = useState(0)
   const currentProvider = state.classifierProvider?.text ?? ''
   injectCss()
-  // 展开设置卡时经 DSH 宿主目录端点拉取 provider 路由候选与全局模型目录（session/modelCatalog），
-  // 候选仅用于快速选择，仍可自定义输入。
+  // 挂载时经 DSH 宿主目录端点拉取 provider 路由候选与全局模型目录（session/modelCatalog），
+  // 候选仅用于快速选择，仍可自定义输入。（插件页配置区常驻展开，无需折叠态触发。）
   useEffect(() => {
-    if (!open) return
     void props.fetchModelCatalog().then((catalog: { providers: string[] }) => {
       props.setOptions('classifierProvider', catalog.providers)
       setCatalogTick((tick) => tick + 1)
     })
-  }, [open])
+  }, [])
   // provider 变化或目录刷新时按需更新模型候选（带竞态防护：仅应用最后一次结果）；空/未知则清空候选。
   useEffect(() => {
-    if (!open) return
     let stale = false
     if (currentProvider === '') {
       props.setOptions('classifierModel', [])
@@ -414,8 +404,11 @@ function SafeAutoCard(props: any) {
       if (!stale) props.setOptions('classifierModel', models)
     })
     return () => { stale = true }
-  }, [open, currentProvider, catalogTick])
+  }, [currentProvider, catalogTick])
   if (!state.available) return null
+  // summary：插件页在条目下渲染的单行说明。plugins.bundle.config 只以 page 调用本组件，
+  // 该分支按 PluginConfigViewProps 契约保留（纯文本即契约允许的内联节点）。
+  if (view === 'summary') return t('description')
   const disabled = !state.writable
   const blocked = !state.dirty || state.invalid || state.saving
   const fields = [
@@ -435,60 +428,46 @@ function SafeAutoCard(props: any) {
     { key: 'proposalContextMaxTotalChars', label: t('proposalContextMaxTotalChars'), hint: t('proposalContextMaxTotalCharsHint') },
     { key: 'showTrail', label: t('showTrail'), hint: t('showTrailHint'), bool: true },
   ]
-  return jsxs('li', {
-    className: 'sa_card',
+  // page：配置表单。插件页自行绘制条目标题、图标与面包屑，本组件不再自带折叠头，
+  // 只渲染只读提示/未保存徽章、字段与保存控件。
+  return jsxs('div', {
+    className: 'sa_form',
     children: [
-      jsxs('button', {
-        type: 'button',
-        className: 'sa_header',
-        'aria-expanded': open,
-        onClick: () => setOpen(!open),
-        children: [
-          jsxs('span', {
-            className: 'sa_headText',
-            children: [
-              jsx('span', { className: 'sa_name', children: t('title') }),
-              jsx('span', { className: 'sa_desc', children: t('description') }),
-            ],
-          }),
-          state.dirty ? jsx('span', { className: 'sa_pending', children: t('unsaved') }) : null,
-          jsx('span', { className: open ? 'sa_chevron sa_chevronOpen' : 'sa_chevron', children: '▾' }),
-        ],
-      }),
-      open
+      !state.writable || state.dirty
         ? jsxs('div', {
-            className: 'sa_body',
+            className: 'sa_formHead',
             children: [
               !state.writable ? jsx('p', { className: 'sa_readOnly', children: t('readOnly') }) : null,
-              fields.map((f) => jsx(ValueField, {
-                key: f.key,
-                id: 'autogate-' + f.key,
-                label: f.label,
-                hint: f.hint,
-                multiline: f.multiline === true,
-                bool: f.bool === true,
-                combo: f.combo === true,
-                overriddenLabel: t('overridden'),
-                resetLabel: t('reset'),
-                invalidLabel: t('invalid'),
-                dirtyLabel: t('dirtyLabel'),
-                disabled,
-                ...state[f.key],
-                onEdit: (text: string) => props.edit(f.key, text),
-                onReset: () => props.resetField(f.key),
-              })),
-              jsxs('div', {
-                className: 'sa_footer',
-                children: [
-                  state.failed ? jsx('p', { className: 'sa_failed', children: state.failedMessage || t('saveFailed') }) : null,
-                  state.saved ? jsx('p', { className: 'sa_saved', children: t('saved') }) : null,
-                  jsx('button', { type: 'button', className: 'sa_btn sa_btnDiscard', disabled: !state.dirty || state.saving, onClick: props.discard, children: t('discard') }),
-                  jsx('button', { type: 'button', className: 'sa_btn sa_btnSave', disabled: blocked, onClick: props.save, children: t(state.saving ? 'saving' : 'save') }),
-                ],
-              }),
+              state.dirty ? jsx('span', { className: 'sa_pending', children: t('unsaved') }) : null,
             ],
           })
         : null,
+      fields.map((f) => jsx(ValueField, {
+        key: f.key,
+        id: 'autogate-' + f.key,
+        label: f.label,
+        hint: f.hint,
+        multiline: f.multiline === true,
+        bool: f.bool === true,
+        combo: f.combo === true,
+        overriddenLabel: t('overridden'),
+        resetLabel: t('reset'),
+        invalidLabel: t('invalid'),
+        dirtyLabel: t('dirtyLabel'),
+        disabled,
+        ...state[f.key],
+        onEdit: (text: string) => props.edit(f.key, text),
+        onReset: () => props.resetField(f.key),
+      })),
+      jsxs('div', {
+        className: 'sa_footer',
+        children: [
+          state.failed ? jsx('p', { className: 'sa_failed', children: state.failedMessage || t('saveFailed') }) : null,
+          state.saved ? jsx('p', { className: 'sa_saved', children: t('saved') }) : null,
+          jsx('button', { type: 'button', className: 'sa_btn sa_btnDiscard', disabled: !state.dirty || state.saving, onClick: props.discard, children: t('discard') }),
+          jsx('button', { type: 'button', className: 'sa_btn sa_btnSave', disabled: blocked, onClick: props.save, children: t(state.saving ? 'saving' : 'save') }),
+        ],
+      }),
     ],
   })
 }
@@ -642,11 +621,13 @@ function apply(ctx: any) {
   // TrailController 经订阅即时启停轮询，无需重新拉取。
   const settingsSource = new ApiSettingsSource(ctx.remote.settings, SETTINGS_NS)
   const controller = new SafeAutoCardController(settingsSource, llmApi, sessionApi)
-  // 新版 DSH 中 settings.plugin.item 是 keyed slot：key 即卡片所编辑的 settings
-  // namespace（autogate），设置页按 namespace 分发渲染；keyed slot 不再接受 id/order。
-  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-    name: 'settings.plugin.item',
-    key: SETTINGS_NS,
+  // 插件配置槽（DSH 0.1.6-alpha.2 起）：原 settings.plugin.item 是设置页的 keyed slot
+  // （key 即 settings namespace），alpha.2 已移除该槽；配置界面统一迁至插件管理页，由
+  // plugins.bundle.config 承载——同为 keyed slot，但 key 换成 bundle 包名，宿主以
+  // view: 'page' 渲染在插件页该 bundle 的配置区（见 BUNDLE_CONFIG_SLOT 注释）。
+  ctx.slots.inject(BUNDLE_CONFIG_SLOT, () => ctx.slots.register({
+    name: BUNDLE_CONFIG_SLOT,
+    key: BUNDLE_PACKAGE_NAME,
     locale: SETTINGS_NS,
     inject: () => controller.inject(),
   }, SafeAutoCard))

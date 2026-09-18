@@ -42,6 +42,20 @@ export function createSnapshotStore<T>(init: T): SnapshotStore<T> {
 export const SETTINGS_NS = 'autogate'
 
 /**
+ * 插件配置槽位名。DSH 0.1.6-alpha.2 起插件的配置界面从设置页迁至插件管理页：
+ * 原 `settings.plugin.item`（keyed by settings namespace）已移除，改由
+ * `plugins.bundle.config` 承载，渲染在插件页该 bundle 的配置区。
+ */
+export const BUNDLE_CONFIG_SLOT = 'plugins.bundle.config'
+
+/**
+ * 本插件在 profile 中的 bundle 包名，即 `plugins.bundle.config` 的 key——
+ * 插件页以 `renderSlot('plugins.bundle.config', { view: 'page' }, { entryKey: pkg.name })`
+ * 分发，`pkg.name` 取自 profile 的 `dsh.profile.bundles` 条目（本包 package.json 的 name）。
+ */
+export const BUNDLE_PACKAGE_NAME = 'dsh-autogate'
+
+/**
  * 成对字段组：重置其一须联动重置另一，否则保存时服务端 validateConfig 的成对约束拒绝。
  * 键为被重置字段，值为须联动重置的成对字段。
  */
@@ -507,7 +521,6 @@ export function formatDuration(ms: number) {
 
 // ==== locale ====
 export const zh = {
-  title: '自动审批（autogate）',
   description: '确定性规则 + LLM 审查的自动审批策略，保留 workspace-write 沙箱',
   unsaved: '未保存',
   readOnly: '当前配置只读',
@@ -571,7 +584,6 @@ export const zh = {
 }
 
 export const en = {
-  title: 'Auto Approval (autogate)',
   description: 'Deterministic rules + LLM review, keeping the workspace-write sandbox',
   unsaved: 'Unsaved',
   readOnly: 'This configuration is read-only',

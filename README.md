@@ -75,7 +75,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 
 配置经 DSH settings 服务（`ctx.settings`）接入：在 `$DSH_HOME/settings.yaml` 写 `autogate:` 段即时热重载；未挂载 settings 服务时回退 `cordis.patch.yml` 的 entry config（`config: {}`）。
 
-> **关于设置 UI**：DSH 0.1.0-rc.7 已移除 rc.6 对第三方插件 namespace 的硬编码 allowlist（`WEB_SETTINGS_NAMESPACES`），并支持插件经 keyed slot（`settings.plugin.item`，`key` 即 namespace）自行注册设置卡片。本插件的设置卡读写走 DSH 官方客户端 settings API（`ctx.connection.api.settings` 的 `describe` / `mutate`，批量 `mutate` 保留跨字段约束如 provider/model 成对的原子性）；审批轨迹面板仍经自有 `/autogate` RPC 端点（`trail`）拉取。写入落在 `$DSH_HOME/settings.yaml` 的 `autogate:` 段并热重载，与下方手动配置完全一致。
+> **关于配置 UI**：DSH 0.1.0-rc.7 起第三方插件无需 `WEB_SETTINGS_NAMESPACES` 硬编码 allowlist；0.1.6-alpha.2 起插件配置统一迁至**插件管理页**（设置页的 `settings.plugin.item` 槽随之移除），本插件经 keyed slot `plugins.bundle.config`（`key` 即 bundle 包名 `dsh-autogate`）注册到该页本插件条目下的配置区。配置读写走 DSH 官方客户端 settings API（`ctx.connection.api.settings` 的 `describe` / `mutate`，批量 `mutate` 保留跨字段约束如 provider/model 成对的原子性）；审批轨迹面板仍经自有 `/autogate` RPC 端点（`trail`）拉取。写入落在 `$DSH_HOME/settings.yaml` 的 `autogate:` 段并热重载，与下方手动配置完全一致。
 
     autogate:
       preflight: false                 # 沙盒前拦截判断开关：true 执行确定性规则+LLM 分类，false（默认）完全依赖沙盒
@@ -128,7 +128,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
 - 展开单条记录可查看操作摘要、拒绝/放行理由、工具 `callId`、本地时间与决策耗时。
 - 「定位」按钮把会话视图滚动到对应的那次工具调用。
 - 数据每 2 秒从插件 `trail` RPC 轮询一次（拉取失败保留上一份快照）。
-- 浮窗可通过配置 `showTrail: false`（或设置卡）关闭：面板隐藏且客户端停止轮询 `trail` RPC；服务端轨迹照常记录。
+- 浮窗可通过配置 `showTrail: false`（或插件页配置）关闭：面板隐藏且客户端停止轮询 `trail` RPC；服务端轨迹照常记录。
 - 轨迹为进程级、仅内存保存：dsh 重启即清空，从不持久化。
 - 拒绝/放行理由跟随 DSH 设置语言（zh/en）：显式设置 `en` 时理由为英文，否则（含未显式设置）回退中文，与界面语言保持一致。
 
@@ -142,7 +142,7 @@ DeepSeek Harness 自动审批插件：在 **workspace-write 沙箱之上** 增�
       paths.ts         路径规范化、危险路径判定、工作区根解析
       trail.ts         审批轨迹（进程级环形缓冲，只增不持久化）
       types.ts         共享类型
-      client.tsx       设置 UI 卡片 + 审批轨迹面板（客户端 bundle）
+      client.tsx       插件页配置表单 + 审批轨迹面板（客户端 bundle）
       client-logic.ts  客户端 UI 逻辑（官方 settings API 数据源 / 表单控制器 / 审批轨迹控制器 / i18n 文案）
     tests/             测试（paths / shell / policy / classifier / trail / settings / client-logic / index）
     scripts/

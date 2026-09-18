@@ -33,7 +33,7 @@ src/
   paths.ts        路径规范化（含 symlink realpath 加固）、危险路径判定、工作区根解析
   trail.ts        审批轨迹（进程级环形缓冲，只增不持久化）
   types.ts        共享类型（Assessment / ClassifierInput / ClassifierDecision / SafetyClassifier）
-  client.tsx      设置 UI 卡片 + 审批轨迹面板（客户端 bundle）
+  client.tsx      插件页配置表单 + 审批轨迹面板（客户端 bundle）
 tests/            与 src 模块一一对应的 *.spec.ts
 scripts/
   build-client.mjs   客户端 bundle 构建脚本
@@ -71,9 +71,10 @@ lib/               编译产物（由 build 生成并纳入版本控制，勿手
 ## 关键不变量（review 时核对）
 
 - 新增「危险操作」类别时，确认其落入 L0 硬 deny 还是 L1 分类，并检查脱敏是否覆盖。
-- 新增配置项必须：`z.object` 校验（含 default / min / max / pattern 约束）+ README 文档 + 客户端设置卡。
+- 新增配置项必须：`z.object` 校验（含 default / min / max / pattern 约束）+ README 文档 + 插件页配置表单（`client.tsx` 的 `SafeAutoCard`）。
 - **授权判定只读投影，禁止新增同步事件读取**：`Session.snapshotEvents` / `eventAt` / `ownEvents` 自 DSH 0.1.6 起弃用（官方 agent note `2026-09-09-deprecate-synchronous-session-event-reads`），Session 实现仍保留内存事件序列属过渡态。权限档一律经 `PermissionPresetResolver` 读取（生产实现为 `ctx.sessionProjections.stateOf(session, 'autogatePermission')`，投影单元见 `applyAuthorizationPreset`）；工具参数回退走 `session/event` 订阅维护的 `toolCallArguments` 缓存。**全插件仅 `trustedUserMessages` 一处保留同步历史读取**（需问答对跨事件配对与「紧邻前一条 assistant」的邻接关系，非投影可表达），已就地附豁免论证，**不得据此新增同类调用**。
 - **授权投影必须保留 source 语义**：`applyAuthorizationPreset` 跳过 `source === 'autogate'` 的继承标记。改用官方 `permissions` 投影会丢失该区分（官方单元只取 `data.preset`），使子代理会话的继承标记成为授权依据、放宽授权。
 - 轨迹为进程级环形缓冲（默认 200 条），只增不持久化，重启即清空；不得引入持久化副作用。
 - **`approval/request` 监听器必须 `{ prepend: true }` 注册**：本插件 bundle 的 `insert` 无锚点、落在 api-gateway（dsh-host-apiproxy）之后加载，不 prepend 则被 host-apiproxy 的 UI answerer 抢先 claim，LLM 预审（L2）永不执行。
+- **配置界面注册在插件管理页的 `plugins.bundle.config`（keyed by bundle 包名 `dsh-autogate`）**：DSH 0.1.6-alpha.2 已移除设置页的 `settings.plugin.item` 槽；宿主以 `view: 'page'` 调用（`summary` 分支按契约保留但当前不触发）。slot 名或 key 写错**不报错、不留日志**，只是配置界面静默消失——改这里必须走 UI 实测验证（见 `BUNDLE_CONFIG_SLOT` / `BUNDLE_PACKAGE_NAME` 注释）。
 - 对 `cordis.patch.yml` 的修改仅限权限预设与插件注册段，保持 auto-full 档 `sandbox: workspace-write`。

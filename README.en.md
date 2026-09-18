@@ -59,7 +59,7 @@ This plugin is a **decision layer that reduces manual approvals — not a securi
 
 Configuration is wired through the DSH settings service (`ctx.settings`): write an `autogate:` section in `$DSH_HOME/settings.yaml` and it hot-reloads immediately; when the settings service is not mounted, it falls back to the entry config in `cordis.patch.yml` (`config: {}`).
 
-> **About the settings UI**: DSH 0.1.0-rc.7 drops the rc.6 hard-coded allowlist (`WEB_SETTINGS_NAMESPACES`) for third-party namespaces and lets plugins register their own settings cards through the keyed slot (`settings.plugin.item`, keyed by namespace). This plugin's settings card reads and writes through the official DSH client settings API (`describe` / `mutate` on `ctx.connection.api.settings`; the batch `mutate` keeps cross-field constraints such as the provider/model pairing atomic). The approval trail panel still pulls through the plugin's own `/autogate` RPC endpoint (`trail`). Writes land in `$DSH_HOME/settings.yaml` under `autogate:` and hot-reload, exactly as the manual section below.
+> **About the config UI**: since DSH 0.1.0-rc.7 third-party plugins need no hard-coded allowlist (`WEB_SETTINGS_NAMESPACES`), and since 0.1.6-alpha.2 plugin configuration moved to the **Plugins page** (the settings-page `settings.plugin.item` slot is gone): this plugin registers into its own entry there through the keyed slot `plugins.bundle.config` (keyed by the bundle package name `dsh-autogate`). Reads and writes go through the official DSH client settings API (`describe` / `mutate` on `ctx.connection.api.settings`; the batch `mutate` keeps cross-field constraints such as the provider/model pairing atomic). The approval trail panel still pulls through the plugin's own `/autogate` RPC endpoint (`trail`). Writes land in `$DSH_HOME/settings.yaml` under `autogate:` and hot-reload, exactly as the manual section below.
 
     autogate:
       preflight: false                 # pre-sandbox interception switch: true runs deterministic rules + LLM classification, false (default) relies entirely on the sandbox
@@ -108,7 +108,7 @@ While the plugin is active, a floating **Approval trail** toggle appears in the 
 - Expanding an entry reveals the one-line operation summary, the deny/allow reason, the tool `callId`, the local time, and the decision duration.
 - The **Locate (定位)** button scrolls the session view to the corresponding tool call.
 - Data is polled from the plugin's `trail` RPC every 2 seconds (the last snapshot is kept on failure).
-- The overlay can be disabled with `showTrail: false` (or in the settings card): the panel is hidden and the client stops polling the `trail` RPC entirely; the trail itself keeps recording server-side.
+- The overlay can be disabled with `showTrail: false` (or on the Plugins page): the panel is hidden and the client stops polling the `trail` RPC entirely; the trail itself keeps recording server-side.
 - The trail is process-level and in-memory only: it resets when dsh restarts and is never persisted.
 - The deny/allow reason follows the DSH setting language (zh/en): it is English when `en` is explicitly set, otherwise (including when unset) it falls back to Simplified Chinese, matching the UI language.
 
@@ -122,7 +122,7 @@ While the plugin is active, a floating **Approval trail** toggle appears in the 
       paths.ts         Path normalization, dangerous-path detection, workspace-root resolution
       trail.ts         Approval trail (process-level ring buffer, append-only, not persisted)
       types.ts         Shared types
-      client.tsx       Settings UI card + approval-trail panel (client bundle)
+      client.tsx       Plugins-page config form + approval-trail panel (client bundle)
       client-logic.ts  Client UI logic (official settings API source / form controller / trail controller / i18n strings)
     tests/             Tests (paths / shell / policy / classifier / trail / settings / client-logic / index)
     scripts/
