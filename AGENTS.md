@@ -77,4 +77,5 @@ lib/               编译产物（由 build 生成并纳入版本控制，勿手
 - 轨迹为进程级环形缓冲（默认 200 条），只增不持久化，重启即清空；不得引入持久化副作用。
 - **`approval/request` 监听器必须 `{ prepend: true }` 注册**：本插件 bundle 的 `insert` 无锚点、落在 api-gateway（dsh-host-apiproxy）之后加载，不 prepend 则被 host-apiproxy 的 UI answerer 抢先 claim，LLM 预审（L2）永不执行。
 - **配置界面注册在插件管理页的 `plugins.bundle.config`（keyed by bundle 包名 `dsh-autogate`）**：DSH 0.1.6-alpha.2 已移除设置页的 `settings.plugin.item` 槽；宿主以 `view: 'page'` 调用（`summary` 分支按契约保留但当前不触发）。slot 名或 key 写错**不报错、不留日志**，只是配置界面静默消失——改这里必须走 UI 实测验证（见 `BUNDLE_CONFIG_SLOT` / `BUNDLE_PACKAGE_NAME` 注释）。
+- **客户端「当前会话」必须读 `ctx.uiSession.adapter.current`**：DSH 0.1.6-alpha.2 起 `SessionListState` 已移除 `current` 字段（官方注释 `navigation belongs to view owners`），改读官方会话作用域适配器 `SlotScopeAdapter.current` 的 binding，取 `props.sessionId ?? key`（无选中时是缺席投影）。客户端 `ctx` 为 `any` 类型、**typecheck 覆盖不到**，此类字段移除只会静默失效（轨迹浮窗退化为「显示全部」）——禁止再用 `sessions.list.getSnapshot().current`。
 - 对 `cordis.patch.yml` 的修改仅限权限预设与插件注册段，保持 auto-full 档 `sandbox: workspace-write`。

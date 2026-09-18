@@ -594,7 +594,7 @@ function TrailPanel(props: any) {
 }
 
 // ==== apply ====
-const inject = ['slots', 'locale', 'connection', 'sessions', 'remote', 'remote.session', 'remote.settings', 'remote.llm']
+const inject = ['slots', 'locale', 'connection', 'sessions', 'uiSession', 'remote', 'remote.session', 'remote.settings', 'remote.llm']
 
 function apply(ctx: any) {
   injectCss()
@@ -632,7 +632,8 @@ function apply(ctx: any) {
     inject: () => controller.inject(),
   }, SafeAutoCard))
 
-  const trailController = new TrailController(trailFetcher, settingsSource, ctx.sessions)
+  // 当前会话来源改为 uiSession 的会话作用域适配器（SessionListState.current 已在 alpha.2 移除）。
+  const trailController = new TrailController(trailFetcher, settingsSource, ctx.uiSession)
   ctx.effect(() => trailController.dispose, 'autogate: trail polling')
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',

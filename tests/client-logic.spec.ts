@@ -447,17 +447,28 @@ describe('TrailController RPC 拉取（受 showTrail 控制）', () => {
     }
   }
 
-  /** 最小 sessions 数据源 mock：暴露 list.getSnapshot/subscribe 与当前会话选择。 */
-  function fakeSessions(current: string | undefined) {
-    let value: { current: string | undefined } = { current }
+  /**
+   * 最小 uiSession mock：模拟官方 SlotScopeAdapter.current（HostObservable<StandardSourceBinding>）。
+   * DSH 0.1.6-alpha.2 起 SessionListState 不再携带 current，当前会话经 binding 的
+   * props.sessionId / key 暴露；无选中时是 absent projection（key 缺席、props 为空对象）。
+   */
+  function fakeUiSession(current: string | undefined) {
+    let value: { key: string | undefined; props: Record<string, unknown> } = bindingOf(current)
     const listeners = new Set<() => void>()
     return {
-      list: {
-        getSnapshot: () => value,
-        subscribe: (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb) },
+      adapter: {
+        current: {
+          getSnapshot: () => value,
+          subscribe: (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb) },
+        },
       },
-      setCurrent: (v: string | undefined) => { value = { current: v }; for (const l of [...listeners]) l() },
+      setCurrent: (v: string | undefined) => { value = bindingOf(v); for (const l of [...listeners]) l() },
     }
+  }
+
+  /** 构造一份会话作用域 binding（含官方 absent projection 形态）。 */
+  function bindingOf(current: string | undefined): { key: string | undefined; props: Record<string, unknown> } {
+    return current === undefined ? { key: undefined, props: {} } : { key: current, props: { sessionId: current } }
   }
 
   it('默认显示 → 启用轮询并拉取更新 records', async () => {
@@ -519,33 +530,33 @@ describe('TrailController RPC 拉取（受 showTrail 控制）', () => {
   })
 
   it('携带当前会话 id 查询（按会话隔离）', async () => {
-    const sessions = fakeSessions('sess-x')
+    const uiSession = fakeUiSession('sess-x')
     const call = vi.fn(async () => ({ ok: true, value: [{ seq: 0 }] }))
     const settings = fakeSettings(true)
-    const controller = new TrailController({ call }, settings as any, sessions as any)
+    const controller = new TrailController({ call }, settings as any, uiSession as any)
     await controller.refresh()
     expect(call).toHaveBeenCalledWith('/autogate', 'trail', { sessionId: 'sess-x' })
     controller.dispose()
   })
 
   it('会话切换后按新会话 id 查询', async () => {
-    const sessions = fakeSessions('sess-x')
+    const uiSession = fakeUiSession('sess-x')
     const call = vi.fn(async () => ({ ok: true, value: [{ seq: 0 }] }))
     const settings = fakeSettings(true)
-    const controller = new TrailController({ call }, settings as any, sessions as any)
+    const controller = new TrailController({ call }, settings as any, uiSession as any)
     await controller.refresh()
     expect(call).toHaveBeenLastCalledWith('/autogate', 'trail', { sessionId: 'sess-x' })
-    sessions.setCurrent('sess-y')
+    uiSession.setCurrent('sess-y')
     await controller.refresh()
     expect(call).toHaveBeenLastCalledWith('/autogate', 'trail', { sessionId: 'sess-y' })
     controller.dispose()
   })
 
   it('toggleShowAll 切「查看全部」不再传 sessionId，再切回恢复按会话隔离', async () => {
-    const sessions = fakeSessions('sess-x')
+    const uiSession = fakeUiSession('sess-x')
     const call = vi.fn(async () => ({ ok: true, value: [{ seq: 0 }] }))
     const settings = fakeSettings(true)
-    const controller = new TrailController({ call }, settings as any, sessions as any)
+    const controller = new TrailController({ call }, settings as any, uiSession as any)
     await controller.refresh()
     expect(call).toHaveBeenLastCalledWith('/autogate', 'trail', { sessionId: 'sess-x' })
 
@@ -561,11 +572,44 @@ describe('TrailController RPC 拉取（受 showTrail 控制）', () => {
     controller.dispose()
   })
 
+  it('无会话选中（absent projection）→ 不传 sessionId，取全部轨迹', async () => {
+    const uiSession = fakeUiSession(undefined)
+    const call = vi.fn(async () => ({ ok: true, value: [] }))
+    const settings = fakeSettings(true)
+    const controller = new TrailController({ call }, settings as any, uiSession as any)
+    await controller.refresh()
+    expect(call).toHaveBeenLastCalledWith('/autogate', 'trail', {})
+    controller.dispose()
+  })
+
+  it('uiSession 缺少 adapter（旧版/未注入）→ 降级为不带 sessionId 且不抛错', async () => {
+    const settings = fakeSettings(true)
+    const call = vi.fn(async () => ({ ok: true, value: [] }))
+    const controller = new TrailController({ call }, settings as any, {} as any)
+    await controller.refresh()
+    expect(call).toHaveBeenLastCalledWith('/autogate', 'trail', {})
+    controller.dispose()
+  })
+
+  it('订阅会话作用域：切换会话立即按新会话重拉', async () => {
+    const uiSession = fakeUiSession('sess-x')
+    const call = vi.fn(async () => ({ ok: true, value: [] }))
+    const settings = fakeSettings(true)
+    const controller = new TrailController({ call }, settings as any, uiSession as any)
+    await controller.refresh()
+    expect(call).toHaveBeenLastCalledWith('/autogate', 'trail', { sessionId: 'sess-x' })
+
+    uiSession.setCurrent('sess-y')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(call).toHaveBeenLastCalledWith('/autogate', 'trail', { sessionId: 'sess-y' })
+    controller.dispose()
+  })
+
   it('setShowAll 状态未变时不重复刷新（tab 点击已选中项无副作用）', async () => {
-    const sessions = fakeSessions('sess-x')
+    const uiSession = fakeUiSession('sess-x')
     const call = vi.fn(async () => ({ ok: true, value: [{ seq: 0 }] }))
     const settings = fakeSettings(true)
-    const controller = new TrailController({ call }, settings as any, sessions as any)
+    const controller = new TrailController({ call }, settings as any, uiSession as any)
     await controller.refresh()
     const callsAfterInit = call.mock.calls.length
 

@@ -411,7 +411,8 @@ export class TrailController {
   timer: any
   rpc: TrailFetcher
   settings: ApiSettingsSource
-  sessions: any
+  /** 会话作用域绑定源（ctx.uiSession.adapter.current）；未注入 uiSession 时为 undefined。 */
+  sessionScope: any
   records: any[] = []
   enabled = true
   currentSessionId: string | undefined
@@ -420,26 +421,31 @@ export class TrailController {
   private unsubscribeSettings: (() => void) | undefined
   private unsubscribeSessions: (() => void) | undefined
 
-  constructor(rpc: any, settings: ApiSettingsSource, sessions?: any) {
+  constructor(rpc: any, settings: ApiSettingsSource, uiSession?: any) {
     this.rpc = rpc
     this.settings = settings
-    this.sessions = sessions
+    // 「当前会话」的来源随 DSH 0.1.6-alpha.2 迁移：SessionListState 已移除 current 字段
+    // （官方注释 navigation belongs to view owners），改读 uiSession 暴露的会话作用域适配器
+    // adapter.current——其 binding 的 props.sessionId / key 即当前主视图会话，无选中时是缺席投影。
+    this.sessionScope = uiSession?.adapter?.current
     this.store = createSnapshotStore({ enabled: true, records: [], showAll: false })
     // 订阅 settings 快照：showTrail 变化时动态启停轮询（设置卡保存后即时生效）。
     this.unsubscribeSettings = settings.subscribe(() => this.sync())
-    // 订阅会话列表：当前会话切换时立即按新会话隔离并刷新轨迹。
-    if (sessions !== undefined && typeof sessions.list?.subscribe === 'function') {
-      this.unsubscribeSessions = sessions.list.subscribe(() => this.sync())
+    // 订阅会话作用域：当前会话切换时立即按新会话隔离并刷新轨迹。
+    if (typeof this.sessionScope?.subscribe === 'function') {
+      this.unsubscribeSessions = this.sessionScope.subscribe(() => this.sync())
     }
     this.sync()
   }
 
   /** 读取当前选中会话 id（无会话选中时返回 undefined）。 */
   private resolveSessionId(): string | undefined {
-    const list = this.sessions?.list
-    if (list === undefined || typeof list.getSnapshot !== 'function') return undefined
-    const current = list.getSnapshot().current
-    return current === undefined || current === null ? undefined : String(current)
+    const scope = this.sessionScope
+    if (scope === undefined || typeof scope.getSnapshot !== 'function') return undefined
+    const binding = scope.getSnapshot()
+    if (binding === undefined || binding === null) return undefined
+    const id = binding.props?.sessionId ?? binding.key
+    return id === undefined || id === null || id === '' ? undefined : String(id)
   }
 
   /** 依据 showTrail 配置启停轮询；当前会话切换时清空旧记录并立即刷新，保证浮窗只显示当前会话的轨迹。 */
