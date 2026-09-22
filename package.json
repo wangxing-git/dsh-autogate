@@ -1,6 +1,6 @@
 {
   "name": "dsh-autogate",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "description": "DeepSeek Harness 自动审批插件：在 workspace-write 沙箱之上增加 Auto 档——确定性规则放行/拒绝，模糊操作由 LLM 裁决，危险操作转人工。保留工作区沙箱边界，不放宽为 full-access。",
   "keywords": [
     "deepseek",
@@ -56,25 +56,33 @@
     "node": ">=22.19.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-api-remotes": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-client-connection": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-client-locale": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-client-ui-settings": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-client-ui-session": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-llm": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-permission-presets": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-session": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-session-projection": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-settings": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-tools": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-user-approval": "^0.1.6-alpha.2",
+    "@deepseek-ai/cordis": "^4.0.3",
+    "@deepseek-ai/cordis-plugin-loader": "^1.0.4",
+    "@deepseek-ai/dsh-agent": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-api-remotes": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-client-connection": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-client-locale": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-client-ui-session": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-llm": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-permission-presets": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-session": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-session-projection": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-settings": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-tools": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-user-approval": "^0.1.7-alpha.1",
     "@deepseek-ai/schemastery": "^3.18.2",
     "react": "^18.2.0",
     "zod": "^4.4.3"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/cordis-plugin-loader": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
       "optional": true
     },
     "@deepseek-ai/dsh-api-remotes": {
@@ -86,10 +94,10 @@
     "@deepseek-ai/dsh-client-locale": {
       "optional": true
     },
-    "@deepseek-ai/dsh-client-ui-settings": {
+    "@deepseek-ai/dsh-client-ui-session": {
       "optional": true
     },
-    "@deepseek-ai/dsh-client-ui-session": {
+    "@deepseek-ai/dsh-client-ui-settings": {
       "optional": true
     },
     "@deepseek-ai/dsh-llm": {
@@ -124,14 +132,29 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-llm": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-permission-presets": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-session": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-session-projection": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-settings": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-tools": "^0.1.6-alpha.2",
-    "@deepseek-ai/dsh-user-approval": "^0.1.6-alpha.2",
+    "@deepseek-ai/cordis": "^4.0.3",
+    "@deepseek-ai/cordis-plugin-include": "^1.0.8",
+    "@deepseek-ai/cordis-plugin-loader": "^1.0.4",
+    "@deepseek-ai/dsh-agent": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-brand": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-commands": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-invariants": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-llm": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-permission-presets": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-ptc-runtime": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-sandbox": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-sandbox-policy": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-scope": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-session": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-session-projection": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-settings": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-shell": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-tools": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-typert-protocol": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-user-approval": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-util-values": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-workspace": "^0.1.7-alpha.1",
     "@deepseek-ai/schemastery": "^3.18.2",
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^3.2.7",

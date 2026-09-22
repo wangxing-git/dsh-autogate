@@ -18,7 +18,8 @@ export interface PolicyRoots {
 /** 可选的根路径覆盖。 */
 export interface RootOptions {
   workspaceRoot?: string
-  tempRoots?: string[]
+  /** 只读：值可能直接来自 volatile 配置快照（DSH 0.1.7 起为只读递归类型）。 */
+  tempRoots?: readonly string[]
   home?: string
 }
 

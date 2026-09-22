@@ -18,6 +18,16 @@ const resolvePreset: PermissionPresetResolver = (session) => {
   return state ?? undefined
 }
 
+/**
+ * 构造 volatile 配置引用（DSH 0.1.7 起 Loader 注入 apply 的配置形状）：每个字段是稳定的
+ * `{ get() }` 访问器，引用身份不随配置更新改变。集成测试只读配置，故直接捕获传入值。
+ */
+function volatileConfig(plain: Record<string, unknown>): Parameters<typeof apply>[1] {
+  const refs: Record<string, { get: () => unknown }> = {}
+  for (const [key, value] of Object.entries(plain)) refs[key] = { get: () => value }
+  return refs as unknown as Parameters<typeof apply>[1]
+}
+
 /** 构造最小可用的 mock Context，捕获各类事件监听器。agentsMap 可选：提供 parentSession → agent 的查找，用于子代理归属测试。 */
 function createMockContext(chunks: any[] | null, agentsMap?: Map<string, unknown>) {
   const listeners = new Map<string, ApprovalListener[]>()
@@ -435,7 +445,7 @@ describe('apply 注册的工具 ask answerer（approval/request，非 escalation
 describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
   it('guard 同步硬 deny 也记录到轨迹（不经过 pre-execute）', async () => {
     const { ctx, guards, trailRoutes } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const exec = { name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-guard-trail', agent: autoAgent(), signal: undefined }
     expect(guards[0](exec as any)).toBe('半自动模式不允许提权')
 
@@ -449,7 +459,7 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
 
   it('L0 硬 deny 记录到轨迹，RPC trail 端点返回记录（preflight 开启）', async () => {
     const { ctx, listeners, trailRoutes } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
     const exec = {
       name: 'bash',
@@ -471,7 +481,7 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
 
   it('L0 allow 也记录到轨迹（decision=allow, layer=L0，preflight 开启）', async () => {
     const { ctx, listeners, trailRoutes } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
     const exec = {
       name: 'read',
@@ -496,7 +506,7 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
       { type: 'finish', reason: { kind: 'stop' } },
     ]
     const { ctx, listeners, trailRoutes } = createMockContext(chunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
     const agent = {
       session: {
@@ -523,7 +533,7 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
 
   it('trail 按 sessionId 过滤：只返回当前会话的记录', async () => {
     const { ctx, listeners, trailRoutes } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
     await preExecute({ name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-a', agent: agentWithPreset('auto-ask', 'sess-a'), signal: undefined }, async () => ({ kind: 'allow' }))
     await preExecute({ name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-b', agent: agentWithPreset('auto-ask', 'sess-b'), signal: undefined }, async () => ({ kind: 'allow' }))
@@ -553,7 +563,7 @@ describe('apply 注册的审批轨迹与 RPC 查询端点', () => {
       options: { provider: 'deepseek', model: 'deepseek-chat' },
     }
     const { ctx, listeners, trailRoutes } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const preExecute = listeners.get('tools/pre-execute')![0] as unknown as (exec: any, next: () => Promise<any>) => Promise<any>
     await preExecute({ name: 'bash', arguments: { command: 'sudo rm -rf /' }, callId: 'call-child', agent: child, signal: undefined }, async () => ({ kind: 'allow' }))
 
@@ -601,7 +611,7 @@ describe('preflight 开关（沙盒前拦截判断）', () => {
 
   it('开启 → 模糊操作走 LLM 分类，allow 放行', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const decision = await preExecuteOf(listeners)(unknownTool('call-preflight-on-allow'), async () => ({ kind: 'allow' }))
     expect(decision).toEqual({ kind: 'allow' })
     expect(capturedCalls).toHaveLength(1)
@@ -609,7 +619,7 @@ describe('preflight 开关（沙盒前拦截判断）', () => {
 
   it('开启 → 模糊操作走 LLM 分类，deny 拒绝', async () => {
     const { ctx, listeners } = createMockContext(denyChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const decision = await preExecuteOf(listeners)(unknownTool('call-preflight-on-deny'), async () => ({ kind: 'allow' }))
     expect(decision).toEqual({ kind: 'deny', reason: expect.stringContaining('[autogate classifier deny]') })
   })
@@ -763,7 +773,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('提取直接人类消息并脱敏凭据', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([presetAuto, userMessage('请用 ghp_abcdefghijklmnopqrst 清理 /tmp')])
     await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-trust'), async () => ({ kind: 'allow' }))
     const input = classifierInput(capturedCalls)
@@ -774,7 +784,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('忽略非直接人类消息（source.kind 非 user）', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       { type: 'user/message', data: { source: { kind: 'assistant' }, content: [{ type: 'text', text: '我是助手输出' }] } },
@@ -789,7 +799,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('短指代 + 前面 AI 方案列表 → 指代上下文随消息进入分类器', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       assistantMessage('方案 A：修改 ~/.config/atlassian-jira-confluence.json 添加 SSL_VERIFY；方案 B：手动添加'),
@@ -806,7 +816,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('无 AI 提议时渲染不含 proposal-context', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([presetAuto, userMessage('允许清理')])
     await (listeners.get('tools/pre-execute')![0] as any)(askTool(agent, 'call-nocontext'), async () => ({ kind: 'allow' }))
     expect(classifierInput(capturedCalls).trustedUserMessages[0]).toBe('<user-authority>允许清理</user-authority>')
@@ -814,7 +824,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('指代上下文中的凭据被脱敏', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       assistantMessage('用 ghp_abcdefghijklmnopqrst 配置环境'),
@@ -828,7 +838,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('超长 AI 提议：截断保留末尾，最后的问询授权不被丢弃', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       assistantMessage('HEAD-MARKER' + 'x'.repeat(600) + 'TAIL-MARKER：是否授权执行该操作？'),
@@ -843,7 +853,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('同一 AI 回复后的多条短插话：proposal 上下文只附给最早的一条（去重省 token）', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       assistantMessage('方案 A：执行 X；方案 B：执行 Y'),
@@ -862,7 +872,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('第一条是长消息 + 后续短插话：context 仍附给第一条（不管长短）', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       assistantMessage('方案 A：执行 X；方案 B：执行 Y'),
@@ -879,7 +889,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('多轮对话：每条用户消息配对各自紧邻前的 AI 提议', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       assistantMessage('第一轮方案：X 或 Y'),
@@ -899,7 +909,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('最多取最近 8 条直接人类消息', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       ...Array.from({ length: 10 }, (_, i) => userMessage('允许操作 ' + (i + 1))),
@@ -947,7 +957,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('ask_user_question 问答对进入审批上下文（问题+回答）', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       askQuestion('ask-1', '是否清理 /tmp', ['是', '否']),
@@ -964,7 +974,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('经 run_code 间接调用的 ask_user_question（tool/ptc-dispatch）问答对进入审批上下文', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       askDispatch('如何处理这两个包？', [
@@ -984,7 +994,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('ask_user_question 选项描述进入问题上下文（label 与 description 一并呈现）', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       askQuestion('ask-desc', '如何处理这两个包？', [
@@ -1004,7 +1014,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('ask_user_question 选项描述中的凭据被脱敏', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       askQuestion('ask-desc-secret', '选择处理方式', [
@@ -1020,7 +1030,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('ask_user_question 回答中的凭据被脱敏', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       askQuestion('ask-2', '请输入访问令牌'),
@@ -1034,7 +1044,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('忽略非 ask_user_question 的 tool/result', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       { type: 'tool/result', data: { message: { source: { kind: 'tool', callId: 'other' }, content: [{ type: 'tool-result', toolCallId: 'other', content: [{ type: 'text', text: '{"foo":1}' }] }] } } },
@@ -1045,7 +1055,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 
   it('非 ask_user_question 的 tool/result 即使含 answers JSON 也不提取（防注入）', async () => {
     const { ctx, listeners, capturedCalls } = createMockContext(allowChunks)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const agent = agentWithEvents([
       presetAuto,
       // run_code 等任意工具的输出若恰好是纯 answers JSON，也不得被当作用户回答（callId 未配对 ask_user_question）。
@@ -1059,7 +1069,7 @@ describe('trustedUserMessages 提取与脱敏（经 LLM 分类输入）', () => 
 describe('preflight 开启时 LLM 异常 fail-closed', () => {
   it('LLM 抛错 → deny（[autogate classifier unavailable]），并写日志', async () => {
     const { ctx, listeners, logCalls } = createMockContext(null)
-    apply(ctx as any, { preflight: true })
+    apply(ctx as any, volatileConfig({ preflight: true }))
     const preExecute = listeners.get('tools/pre-execute')![0] as any
     const exec = { name: 'unrecognized_tool', arguments: { probe: true }, callId: 'call-llm-down', agent: autoAgent(), signal: new AbortController().signal }
     const decision = await preExecute(exec, async () => ({ kind: 'allow' }))
@@ -1354,23 +1364,16 @@ function createLocaleContext() {
   const mountSettings = () => {
     const sctx = {
       settings: {
-        installSection(_owner: unknown, _ns: unknown, _schema: unknown, entry: unknown, hooks: any) {
-          hooks.validate?.({ ...(entry ?? {}) })
-          const resolved = { ...(entry ?? {}) }
-          hooks.setSource(() => resolved)
-          hooks.onChange()
-          return { get: () => resolved, watch() { return () => {} }, update: async () => {}, replace: async () => {} }
-        },
-        get(ns: unknown) {
-          if (String(ns) === 'locale') return localeValue
-          return undefined
-        },
+        // DSH 0.1.7：插件不再自注册配置段，改为声明页面策略（owner 必须是本插件 fiber）。
+        configure(_presentation: unknown, _owner?: unknown) { return () => {} },
+        // 语言读取改走 describe() 的表单投影（旧的按 namespace 取值 get 已移除）。
+        describe() { return [{ ns: 'locale', value: localeValue }] },
       },
       on(event: string, listener: any) {
-        if (event === 'settings/updated') localeListeners.push(listener)
+        if (event === 'settings/document-updated') localeListeners.push(listener)
         return () => {}
       },
-      effect() { return () => {} },
+      effect(fn: () => unknown) { fn(); return () => {} },
     }
     for (const cb of settingsCallbacks) cb(sctx)
   }
@@ -1391,7 +1394,7 @@ describe('locale 语言跟随（服务端读 settings + L0/L1 理由本地化）
 
   it('preflight + locale=zh → 分类 system 提示词注入中文指令', async () => {
     const { ctx, listeners, streamCalls, mountSettings } = createLocaleContext()
-    apply(ctx, { preflight: true })
+    apply(ctx, volatileConfig({ preflight: true }))
     mountSettings()
     const preExecute = listeners.get('tools/pre-execute')![0]
     const exec = { name: 'unrecognized_tool', arguments: { probe: true }, callId: 'c-locale', agent: autoAgent(), signal: new AbortController().signal }

@@ -1,4 +1,4 @@
-import type { Context } from '@deepseek-ai/cordis';
+import type { Context, Volatile } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
 import type { ToolExecution } from '@deepseek-ai/dsh-tools';
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session';
@@ -22,37 +22,85 @@ export declare const SEMI_AUTO_PERMISSION_PRESET = "auto-ask";
  * 出现同名键会直接抛错，故本档改用 `auto-full`。
  */
 export declare const AUTO_PERMISSION_PRESET = "auto-full";
-/** 宿主策略配置。 */
+/**
+ * 宿主策略配置。
+ *
+ * DSH 0.1.7 起设置机制改为「profile 条目 Config + volatile 引用」：Loader 用
+ * {@link Config} schema 校验后，把每个字段包成稳定访问器 {@link Volatile} 传入——
+ * 引用身份不随配置更新改变，新值由 Loader 就地提交，读方按需 `.get()`。
+ * 只有标注 `.volatile()` 的字段才进入插件配置表单（未标注的字段既不显示、
+ * 写入时也会被 `Config field "x" is not volatile` 拒绝），故全部可配置项都要标注。
+ *
+ * 字段类型对应：schema 有 `default()` → `Volatile<T>`；无默认值 → `Volatile<T | undefined>`。
+ */
 export interface Config {
     /** 半自动权限预设键（默认 auto-ask）：危险操作转人工兜底弹窗。 */
-    readonly presetName?: string;
-    readonly workspaceRoot?: string;
-    readonly tempRoots?: string[];
-    readonly classifierEndpoint?: string;
-    readonly classifierProvider?: string;
-    readonly classifierModel?: string;
-    readonly classifierPrompt?: string;
-    readonly classifierApiKeyEnv?: string;
-    readonly classifierTimeoutMs?: number;
-    readonly classifierMaxOutputTokens?: number;
+    readonly presetName: Volatile<string>;
+    readonly workspaceRoot: Volatile<string | undefined>;
+    readonly tempRoots: Volatile<string[] | undefined>;
+    readonly classifierEndpoint: Volatile<string | undefined>;
+    readonly classifierProvider: Volatile<string | undefined>;
+    readonly classifierModel: Volatile<string | undefined>;
+    readonly classifierPrompt: Volatile<string>;
+    readonly classifierApiKeyEnv: Volatile<string>;
+    readonly classifierTimeoutMs: Volatile<number>;
+    readonly classifierMaxOutputTokens: Volatile<number>;
     /** 分类器输出解析失败时静默重试一次；默认开启（temperature 0 下偶发格式抖动）。 */
-    readonly classifierRetry?: boolean;
+    readonly classifierRetry: Volatile<boolean>;
     /** HTTP 分类端点请求显式关闭思考模式（reasoning_effort: "none"）；默认开启，端点不支持该参数（如 DeepSeek 官方 API 报 400）时关闭。 */
-    readonly classifierHttpDisableReasoning?: boolean;
+    readonly classifierHttpDisableReasoning: Volatile<boolean>;
     /** 短指代消息长度阈值（字符）：长度不超过该值的直接人类消息才携带 AI 提议上下文用于消解指代；默认 10。 */
-    readonly proposalContextMaxMessageLen?: number;
+    readonly proposalContextMaxMessageLen: Volatile<number>;
     /** 单条 AI 提议上下文上限（字符）；默认 400。 */
-    readonly proposalContextMaxChars?: number;
+    readonly proposalContextMaxChars: Volatile<number>;
     /** AI 提议上下文总预算（字符）：多条消息的上下文合计不超过该值；默认 2000。 */
-    readonly proposalContextMaxTotalChars?: number;
+    readonly proposalContextMaxTotalChars: Volatile<number>;
     /** 沙盒前拦截判断开关：true 执行普通 L0 规则 + LLM 分类，false 完全依赖沙盒（硬 deny 与提权审批不受影响）。 */
-    readonly preflight?: boolean;
+    readonly preflight: Volatile<boolean>;
     /** 审批轨迹浮窗开关（默认显示）：关闭则不显示右下角浮窗，且客户端停止轮询轨迹接口。 */
-    readonly showTrail?: boolean;
+    readonly showTrail: Volatile<boolean>;
     /** 全自动权限预设键（默认 auto-full）：该预设下审批不再人工弹窗，LLM 裁决为最终决定。 */
-    readonly fullAutoPresetName?: string;
+    readonly fullAutoPresetName: Volatile<string>;
 }
-export declare const Config: z<Config>;
+export declare const Config: z<Schemastery.ObjectS<NoInfer<{
+    presetName: z<string, string, "volatile-defined">;
+    workspaceRoot: z<string, string, "volatile">;
+    tempRoots: z<NoInfer<string[]>, NoInfer<string[]>, "volatile">;
+    classifierEndpoint: z<string, string, "volatile">;
+    classifierProvider: z<string, string, "volatile">;
+    classifierModel: z<string, string, "volatile">;
+    classifierPrompt: z<string, string, "volatile-defined">;
+    classifierApiKeyEnv: z<string, string, "volatile-defined">;
+    classifierTimeoutMs: z<number, number, "volatile-defined">;
+    classifierMaxOutputTokens: z<number, number, "volatile-defined">;
+    classifierRetry: z<boolean, boolean, "volatile-defined">;
+    classifierHttpDisableReasoning: z<boolean, boolean, "volatile-defined">;
+    proposalContextMaxMessageLen: z<number, number, "volatile-defined">;
+    proposalContextMaxChars: z<number, number, "volatile-defined">;
+    proposalContextMaxTotalChars: z<number, number, "volatile-defined">;
+    preflight: z<boolean, boolean, "volatile-defined">;
+    showTrail: z<boolean, boolean, "volatile-defined">;
+    fullAutoPresetName: z<string, string, "volatile-defined">;
+}>>, Schemastery.ObjectT<NoInfer<{
+    presetName: z<string, string, "volatile-defined">;
+    workspaceRoot: z<string, string, "volatile">;
+    tempRoots: z<NoInfer<string[]>, NoInfer<string[]>, "volatile">;
+    classifierEndpoint: z<string, string, "volatile">;
+    classifierProvider: z<string, string, "volatile">;
+    classifierModel: z<string, string, "volatile">;
+    classifierPrompt: z<string, string, "volatile-defined">;
+    classifierApiKeyEnv: z<string, string, "volatile-defined">;
+    classifierTimeoutMs: z<number, number, "volatile-defined">;
+    classifierMaxOutputTokens: z<number, number, "volatile-defined">;
+    classifierRetry: z<boolean, boolean, "volatile-defined">;
+    classifierHttpDisableReasoning: z<boolean, boolean, "volatile-defined">;
+    proposalContextMaxMessageLen: z<number, number, "volatile-defined">;
+    proposalContextMaxChars: z<number, number, "volatile-defined">;
+    proposalContextMaxTotalChars: z<number, number, "volatile-defined">;
+    preflight: z<boolean, boolean, "volatile-defined">;
+    showTrail: z<boolean, boolean, "volatile-defined">;
+    fullAutoPresetName: z<string, string, "volatile-defined">;
+}>>, "plain">;
 declare module '@deepseek-ai/dsh-session-projection/types' {
     interface SessionProjectionStateMap {
         /** 最近一次用户真实切换（非 {@link INHERITED_PRESET_SOURCE} 继承标记）的权限预设名；无则为 null。 */
@@ -93,4 +141,4 @@ export declare function managedPermissionAuthority(agent: ToolExecution['agent']
  */
 export declare function rememberToolCallArguments(cache: Map<string, unknown>, event: SessionEvent): void;
 /** 安装自动权限策略到官方工具流水线。 */
-export declare function apply(ctx: Context, config?: Config): void;
+export declare function apply(ctx: Context, config?: Partial<Config>): void;

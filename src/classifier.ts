@@ -4,6 +4,20 @@ import type { GenerateOptions, Message, StreamChunk, TokenUsage } from '@deepsee
 import type { ClassifierDecision, ClassifierInput, ClassifierTokenUsage, SafetyClassifier } from './types.js'
 import type { UiLocale } from './i18n.js'
 
+/**
+ * 消息来源声明。DSH 0.1.7 起 MessageSourceMap 不再有通用的 `plugin` 兜底 kind，
+ * 改为「每个生产者在自己模块里声明」（declaration merging，见官方 ptc-mode 同款做法）。
+ * 本插件的 L1 分类调用是插件发起的独立 LLM 请求，不属于任何会话内生产者，故自定义 kind。
+ */
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    /** autogate 的 L1 安全分类调用（插件发起的独立审查请求）。 */
+    'autogate-classifier': {
+      kind: 'autogate-classifier'
+    }
+  }
+}
+
 /** 分类器系统提示词：按操作的具体目标/类型/可逆性/实际影响做语义判断，越界本身不是拒绝理由；低风险越界放行，真正危险才拒绝。 */
 export const CLASSIFIER_SYSTEM_PROMPT = [
   'You are an independent security classifier for a coding agent tool call. Judge the CONCRETE operation by its target, type, reversibility, and real impact — not merely by whether it crosses the workspace boundary. Crossing the workspace boundary alone is NOT a reason to deny.',
@@ -149,7 +163,7 @@ function classifierMessage(input: ClassifierInput): Message {
         }),
       }),
     }],
-    source: { kind: 'plugin', plugin: 'dsh-autogate' },
+    source: { kind: 'autogate-classifier' },
   }
 }
 

@@ -1,4 +1,4 @@
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
@@ -9,6 +9,8 @@ import { assessTool, hardDenyReason, isSandboxEscalationRetry, summarizeToolArgu
 import { setApprovalPolicy, type ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-settings'
+// 引入 declaration merging：'loader/volatile-update' 事件类型（配置热更新派发）由 loader 扩展。
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 // 引入 declaration merging：'permission/preset' 事件类型由 dsh-permission-presets 扩展到 SessionEventMap。
 import type {} from '@deepseek-ai/dsh-permission-presets'
 // 引入 declaration merging：ctx.sessionProjections 服务与 SessionProjectionStateMap（本插件的授权投影 key）。
@@ -78,57 +80,125 @@ export const SEMI_AUTO_PERMISSION_PRESET = 'auto-ask'
  */
 export const AUTO_PERMISSION_PRESET = 'auto-full'
 
-/** 宿主策略配置。 */
+/**
+ * 宿主策略配置。
+ *
+ * DSH 0.1.7 起设置机制改为「profile 条目 Config + volatile 引用」：Loader 用
+ * {@link Config} schema 校验后，把每个字段包成稳定访问器 {@link Volatile} 传入——
+ * 引用身份不随配置更新改变，新值由 Loader 就地提交，读方按需 `.get()`。
+ * 只有标注 `.volatile()` 的字段才进入插件配置表单（未标注的字段既不显示、
+ * 写入时也会被 `Config field "x" is not volatile` 拒绝），故全部可配置项都要标注。
+ *
+ * 字段类型对应：schema 有 `default()` → `Volatile<T>`；无默认值 → `Volatile<T | undefined>`。
+ */
 export interface Config {
   /** 半自动权限预设键（默认 auto-ask）：危险操作转人工兜底弹窗。 */
-  readonly presetName?: string
-  readonly workspaceRoot?: string
-  readonly tempRoots?: string[]
-  readonly classifierEndpoint?: string
-  readonly classifierProvider?: string
-  readonly classifierModel?: string
-  readonly classifierPrompt?: string
-  readonly classifierApiKeyEnv?: string
-  readonly classifierTimeoutMs?: number
-  readonly classifierMaxOutputTokens?: number
+  readonly presetName: Volatile<string>
+  readonly workspaceRoot: Volatile<string | undefined>
+  readonly tempRoots: Volatile<string[] | undefined>
+  readonly classifierEndpoint: Volatile<string | undefined>
+  readonly classifierProvider: Volatile<string | undefined>
+  readonly classifierModel: Volatile<string | undefined>
+  readonly classifierPrompt: Volatile<string>
+  readonly classifierApiKeyEnv: Volatile<string>
+  readonly classifierTimeoutMs: Volatile<number>
+  readonly classifierMaxOutputTokens: Volatile<number>
   /** 分类器输出解析失败时静默重试一次；默认开启（temperature 0 下偶发格式抖动）。 */
-  readonly classifierRetry?: boolean
+  readonly classifierRetry: Volatile<boolean>
   /** HTTP 分类端点请求显式关闭思考模式（reasoning_effort: "none"）；默认开启，端点不支持该参数（如 DeepSeek 官方 API 报 400）时关闭。 */
-  readonly classifierHttpDisableReasoning?: boolean
+  readonly classifierHttpDisableReasoning: Volatile<boolean>
   /** 短指代消息长度阈值（字符）：长度不超过该值的直接人类消息才携带 AI 提议上下文用于消解指代；默认 10。 */
-  readonly proposalContextMaxMessageLen?: number
+  readonly proposalContextMaxMessageLen: Volatile<number>
   /** 单条 AI 提议上下文上限（字符）；默认 400。 */
-  readonly proposalContextMaxChars?: number
+  readonly proposalContextMaxChars: Volatile<number>
   /** AI 提议上下文总预算（字符）：多条消息的上下文合计不超过该值；默认 2000。 */
-  readonly proposalContextMaxTotalChars?: number
+  readonly proposalContextMaxTotalChars: Volatile<number>
   /** 沙盒前拦截判断开关：true 执行普通 L0 规则 + LLM 分类，false 完全依赖沙盒（硬 deny 与提权审批不受影响）。 */
-  readonly preflight?: boolean
+  readonly preflight: Volatile<boolean>
   /** 审批轨迹浮窗开关（默认显示）：关闭则不显示右下角浮窗，且客户端停止轮询轨迹接口。 */
-  readonly showTrail?: boolean
+  readonly showTrail: Volatile<boolean>
   /** 全自动权限预设键（默认 auto-full）：该预设下审批不再人工弹窗，LLM 裁决为最终决定。 */
-  readonly fullAutoPresetName?: string
+  readonly fullAutoPresetName: Volatile<string>
 }
 
-export const Config: z<Config> = z.object({
-  presetName: z.string().default(SEMI_AUTO_PERMISSION_PRESET).description('半自动权限预设键（默认 auto-ask）：危险操作转人工兜底弹窗'),
-  workspaceRoot: z.string().description('覆盖工作区根目录（默认取会话 cwd）'),
-  tempRoots: z.array(z.string()).description('信任的临时目录列表（默认系统临时目录）'),
-  classifierEndpoint: z.string().description('独立 OpenAI 兼容分类端点（HTTPS；loopback 可用 http）'),
-  classifierProvider: z.string().description('固定分类 provider（须与 classifierModel 成对配置）'),
-  classifierModel: z.string().description('固定分类模型（须与 classifierProvider 成对配置）'),
-  classifierPrompt: z.string().default(CLASSIFIER_SYSTEM_PROMPT).description('审查（分类）系统提示词'),
-  classifierApiKeyEnv: z.string().default('DEEPSEEK_API_KEY').pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).description('HTTP 分类端点 API Key 的环境变量名'),
-  classifierTimeoutMs: z.number().default(8_000).min(100).max(60_000).description('分类器超时毫秒数，超时 fail-closed'),
-  classifierMaxOutputTokens: z.number().default(1_024).min(64).max(4_096).description('分类器输出 token 上限'),
-  classifierRetry: z.boolean().default(true).description('分类器输出解析失败时静默重试一次；默认开启'),
-  classifierHttpDisableReasoning: z.boolean().default(true).description('HTTP 分类端点请求显式关闭思考模式（reasoning_effort=none）；端点不支持该参数时关闭'),
-  proposalContextMaxMessageLen: z.natural().default(10).min(1).max(200).description('短指代消息长度阈值（字符）：长度不超过该值才携带 AI 提议上下文；默认 10'),
-  proposalContextMaxChars: z.natural().default(400).min(64).max(4_000).description('单条 AI 提议上下文上限（字符）；默认 400'),
-  proposalContextMaxTotalChars: z.natural().default(2_000).min(64).max(8_000).description('AI 提议上下文总预算（字符）；默认 2000'),
-  preflight: z.boolean().default(false).description('沙盒前拦截判断开关：开启执行确定性规则与 LLM 分类，关闭则完全依赖沙盒策略（硬 deny 与提权审批不受影响）'),
-  showTrail: z.boolean().default(true).description('审批轨迹浮窗开关：默认显示；关闭则不显示浮窗且客户端停止轮询轨迹接口'),
-  fullAutoPresetName: z.string().default(AUTO_PERMISSION_PRESET).description('全自动权限预设键（默认 auto-full）：该预设下审批不再人工弹窗，LLM 裁决为最终决定'),
+// 注意：不能再写显式标注 `z<Config>` —— volatile 字段把 schema 的 mode 从 plain 改为
+// volatile，与手工声明的 plain 类型不再匹配，交由 schema 自行推断（volatile 类型一致性
+// 由下方 Config 接口与 .volatile() 标注的逐字段对应关系保证）。
+export const Config = z.object({
+  presetName: z.string().default(SEMI_AUTO_PERMISSION_PRESET).description('半自动权限预设键（默认 auto-ask）：危险操作转人工兜底弹窗').volatile(),
+  workspaceRoot: z.string().description('覆盖工作区根目录（默认取会话 cwd）').volatile(),
+  tempRoots: z.array(z.string()).description('信任的临时目录列表（默认系统临时目录）').volatile(),
+  classifierEndpoint: z.string().description('独立 OpenAI 兼容分类端点（HTTPS；loopback 可用 http）').volatile(),
+  classifierProvider: z.string().description('固定分类 provider（须与 classifierModel 成对配置）').volatile(),
+  classifierModel: z.string().description('固定分类模型（须与 classifierProvider 成对配置）').volatile(),
+  classifierPrompt: z.string().default(CLASSIFIER_SYSTEM_PROMPT).description('审查（分类）系统提示词').volatile(),
+  classifierApiKeyEnv: z.string().default('DEEPSEEK_API_KEY').pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).description('HTTP 分类端点 API Key 的环境变量名').volatile(),
+  classifierTimeoutMs: z.number().default(8_000).min(100).max(60_000).description('分类器超时毫秒数，超时 fail-closed').volatile(),
+  classifierMaxOutputTokens: z.number().default(1_024).min(64).max(4_096).description('分类器输出 token 上限').volatile(),
+  classifierRetry: z.boolean().default(true).description('分类器输出解析失败时静默重试一次；默认开启').volatile(),
+  classifierHttpDisableReasoning: z.boolean().default(true).description('HTTP 分类端点请求显式关闭思考模式（reasoning_effort=none）；端点不支持该参数时关闭').volatile(),
+  proposalContextMaxMessageLen: z.natural().default(10).min(1).max(200).description('短指代消息长度阈值（字符）：长度不超过该值才携带 AI 提议上下文；默认 10').volatile(),
+  proposalContextMaxChars: z.natural().default(400).min(64).max(4_000).description('单条 AI 提议上下文上限（字符）；默认 400').volatile(),
+  proposalContextMaxTotalChars: z.natural().default(2_000).min(64).max(8_000).description('AI 提议上下文总预算（字符）；默认 2000').volatile(),
+  preflight: z.boolean().default(false).description('沙盒前拦截判断开关：开启执行确定性规则与 LLM 分类，关闭则完全依赖沙盒策略（硬 deny 与提权审批不受影响）').volatile(),
+  showTrail: z.boolean().default(true).description('审批轨迹浮窗开关：默认显示；关闭则不显示浮窗且客户端停止轮询轨迹接口').volatile(),
+  fullAutoPresetName: z.string().default(AUTO_PERMISSION_PRESET).description('全自动权限预设键（默认 auto-full）：该预设下审批不再人工弹窗，LLM 裁决为最终决定').volatile(),
 })
+
+/**
+ * 解包 volatile 引用后的配置值，供内部逻辑使用（等价于 DSH 0.1.7 之前的 Config 形状）。
+ * 派生对象（分类器、根选项）在 {@link resolveConfig} 时一次性构造，故读取发生在业务操作之外。
+ */
+interface ResolvedConfig {
+  presetName?: string
+  workspaceRoot?: string
+  tempRoots?: readonly string[]
+  classifierEndpoint?: string
+  classifierProvider?: string
+  classifierModel?: string
+  classifierPrompt?: string
+  classifierApiKeyEnv?: string
+  classifierTimeoutMs?: number
+  classifierMaxOutputTokens?: number
+  classifierRetry?: boolean
+  classifierHttpDisableReasoning?: boolean
+  proposalContextMaxMessageLen?: number
+  proposalContextMaxChars?: number
+  proposalContextMaxTotalChars?: number
+  preflight?: boolean
+  showTrail?: boolean
+  fullAutoPresetName?: string
+}
+
+/**
+ * 把 volatile 引用逐字段求值为普通配置值。每次读取都取当前值（Loader 就地提交新值到
+ * 同一引用），因此重建派生态时必须重新调用本函数。
+ *
+ * 字段可缺省：cordis 正常注入时 schema 已填好默认值，但直接调 `apply(ctx)` 的测试路径
+ * 拿到的是空对象，故用可选链兜底。
+ */
+function resolveConfig(config: Partial<Config>): ResolvedConfig {
+  return {
+    presetName: config.presetName?.get(),
+    workspaceRoot: config.workspaceRoot?.get(),
+    tempRoots: config.tempRoots?.get(),
+    classifierEndpoint: config.classifierEndpoint?.get(),
+    classifierProvider: config.classifierProvider?.get(),
+    classifierModel: config.classifierModel?.get(),
+    classifierPrompt: config.classifierPrompt?.get(),
+    classifierApiKeyEnv: config.classifierApiKeyEnv?.get(),
+    classifierTimeoutMs: config.classifierTimeoutMs?.get(),
+    classifierMaxOutputTokens: config.classifierMaxOutputTokens?.get(),
+    classifierRetry: config.classifierRetry?.get(),
+    classifierHttpDisableReasoning: config.classifierHttpDisableReasoning?.get(),
+    proposalContextMaxMessageLen: config.proposalContextMaxMessageLen?.get(),
+    proposalContextMaxChars: config.proposalContextMaxChars?.get(),
+    proposalContextMaxTotalChars: config.proposalContextMaxTotalChars?.get(),
+    preflight: config.preflight?.get(),
+    showTrail: config.showTrail?.get(),
+    fullAutoPresetName: config.fullAutoPresetName?.get(),
+  }
+}
 
 /**
  * 本插件写入子代理会话的权限档继承标记 source。
@@ -255,7 +325,7 @@ export function managedPermissionAuthority(
 }
 
 /** 从配置构造根路径选项：空 tempRoots 归一化为默认（系统临时目录）。 */
-function rootOptionsFrom(config: Config): RootOptions {
+function rootOptionsFrom(config: ResolvedConfig): RootOptions {
   const tempRoots = config.tempRoots === undefined || config.tempRoots.length === 0 ? undefined : config.tempRoots
   return {
     ...(config.workspaceRoot === undefined ? {} : { workspaceRoot: config.workspaceRoot }),
@@ -263,8 +333,14 @@ function rootOptionsFrom(config: Config): RootOptions {
   }
 }
 
-/** schema 无法表达的跨字段/协议约束；settings 写入时拒绝非法配置。 */
-function validateConfig(config: Config): void {
+/**
+ * schema 无法表达的跨字段/协议约束。
+ *
+ * DSH 0.1.7 起 settings 服务不再提供写入期 validate 钩子（写入只做 JSON 形状 +
+ * schemastery + volatile 路径校验），故本函数改由 rebuild 在应用配置前调用：
+ * 非法配置不生效（沿用上一份有效配置），首次加载即非法则 fail-fast 抛出。
+ */
+function validateConfig(config: ResolvedConfig): void {
   const hasProvider = config.classifierProvider !== undefined && config.classifierProvider !== ''
   const hasModel = config.classifierModel !== undefined && config.classifierModel !== ''
   if (hasProvider !== hasModel) throw new Error('classifierProvider 与 classifierModel 必须成对配置')
@@ -280,7 +356,7 @@ function validateConfig(config: Config): void {
   }
 }
 
-function classifierFrom(ctx: Context, config: Config, locale: () => UiLocale | undefined): SafetyClassifier {
+function classifierFrom(ctx: Context, config: ResolvedConfig, locale: () => UiLocale | undefined): SafetyClassifier {
   const timeoutMs = config.classifierTimeoutMs ?? 8_000
   const systemPrompt = config.classifierPrompt === undefined || config.classifierPrompt.trim() === '' ? undefined : config.classifierPrompt
   if (!Number.isFinite(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) {
@@ -605,25 +681,27 @@ export function rememberToolCallArguments(cache: Map<string, unknown>, event: Se
 }
 
 /** 安装自动权限策略到官方工具流水线。 */
-export function apply(ctx: Context, config: Config = {}): void {
-  const entry = config
+export function apply(ctx: Context, config: Partial<Config> = {}): void {
   // 当前 UI 语言：跟随 DSH 设置语言（locale.preference）；未显式设置时回退中文，
   // 与客户端浏览器语言 fallback（中文优先）保持一致。
   let uiLocale: UiLocale = 'zh'
-  let presetName = entry.presetName ?? SEMI_AUTO_PERMISSION_PRESET
-  let fullAutoPresetName = entry.fullAutoPresetName ?? AUTO_PERMISSION_PRESET
-  let classifier = classifierFrom(ctx, entry, () => uiLocale)
-  let rootOptions = rootOptionsFrom(entry)
-  let preflight = entry.preflight ?? false
-  let proposalContextMaxMessageLen = entry.proposalContextMaxMessageLen ?? 10
-  let proposalContextMaxChars = entry.proposalContextMaxChars ?? 400
-  let proposalContextMaxTotalChars = entry.proposalContextMaxTotalChars ?? 2_000
+  // 派生态：由 rebuild() 从 volatile 引用求值（分类器与根选项是构造出来的对象，
+  // 无法逐次读取，故配置变化后必须整体重建）。
+  let presetName: string = SEMI_AUTO_PERMISSION_PRESET
+  let fullAutoPresetName: string = AUTO_PERMISSION_PRESET
+  let classifier!: SafetyClassifier
+  let rootOptions: RootOptions = {}
+  let preflight = false
+  let proposalContextMaxMessageLen = 10
+  let proposalContextMaxChars = 400
+  let proposalContextMaxTotalChars = 2_000
 
-  let source: () => Config = () => entry
   let built = false
   const rebuild = (): void => {
     try {
-      const cfg = source()
+      const cfg = resolveConfig(config)
+      // 原 settings 写入期校验的替代：非法配置不落地，沿用上一份有效配置。
+      validateConfig(cfg)
       presetName = cfg.presetName ?? SEMI_AUTO_PERMISSION_PRESET
       fullAutoPresetName = cfg.fullAutoPresetName ?? AUTO_PERMISSION_PRESET
       classifier = classifierFrom(ctx, cfg, () => uiLocale)
@@ -639,28 +717,34 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
   }
 
-  // 无缝接入 DSH 配置：settings 挂载时用 settings.yaml 的 autogate 段（热重载），未挂载回退 entry config。
+  // 接入 DSH 设置：DSH 0.1.7 起插件不再自注册配置段（installSection 已移除），改为在
+  // profile 条目 Config 上声明 volatile 字段——Loader 就地把新值提交到已有引用，并派发
+  // loader/volatile-update（只发给该条目自己的 fiber），本插件据此重建派生态。
+  // configure({ auto: false }) 声明本插件自带配置页面（客户端 plugins.bundle.config 槽）；
+  // owner 必须显式传 ctx.fiber——默认值是 settings 服务自身的 fiber，会把策略挂错实例。
   ctx.inject(['settings'], (sctx) => {
-    sctx.settings.installSection(ctx, 'autogate', Config, entry, {
-      setSource: (current: () => Config) => { source = current },
-      onChange: () => { rebuild() },
-      validate: validateConfig,
-    })
+    sctx.effect(() => sctx.settings.configure({ auto: false }, ctx.fiber))
+    sctx.on('loader/volatile-update', () => { rebuild() })
   })
   rebuild()
 
-  // 跟随 DSH 设置语言：locale.preference（'zh'|'en'）由 dsh-client-locale 持久化在同一个
-  // settings 文档里，服务端直接读取即可；据此让 L0 理由与 L1 分类 reason 使用对应语言。
+  // 跟随 DSH 设置语言：locale.preference（'zh'|'en'）由 dsh-client-locale 持久化在其
+  // profile 条目的配置里；据此让 L0 理由与 L1 分类 reason 使用对应语言。
+  // DSH 0.1.7 起 settings 不再向业务提供按 namespace 取值（get 已移除），改从 describe()
+  // 的表单投影里读取：descriptor.value 是解包 volatile 后的普通值，ns 即 profile 条目 id
+  // （dsh-client-locale 的条目 id 为 'locale'）。describe() 会同步遍历全部条目并推进
+  // revision，故只在挂载与语言变更时调用，不进热路径。变更事件为 settings/document-updated。
   ctx.inject(['settings'], (sctx) => {
     const localeNs = 'locale'
     const readLocale = (): void => {
-      const value = sctx.settings.get(localeNs) as { preference?: UiLocale } | undefined
+      const row = sctx.settings.describe().find(item => String(item.ns) === localeNs)
+      const value = row?.value as { preference?: UiLocale } | undefined
       // 未显式设置（preference 缺失）时回退中文，与客户端浏览器语言 fallback 一致。
       uiLocale = value?.preference ?? 'zh'
     }
     readLocale()
-    sctx.on('settings/updated', (ns: unknown) => {
-      if (ns === localeNs) readLocale()
+    sctx.on('settings/document-updated', (ns: unknown) => {
+      if (String(ns) === localeNs) readLocale()
     })
     // settings 服务卸载时回退中文（未显式设置语言时的默认行为）。
     sctx.effect(() => () => { uiLocale = 'zh' })
