@@ -14,7 +14,7 @@ import type {} from '@deepseek-ai/cordis-plugin-loader'
 // 引入 declaration merging：'permission/preset' 事件类型由 dsh-permission-presets 扩展到 SessionEventMap。
 import type {} from '@deepseek-ai/dsh-permission-presets'
 // 引入 declaration merging：ctx.sessionProjections 服务与 SessionProjectionStateMap（本插件的授权投影 key）。
-import type {} from '@deepseek-ai/dsh-session-projection'
+import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import type { ClassifierInput, ClassifierTokenUsage, ManagedMode, SafetyClassifier } from './types.js'
 import { createApprovalTrail, type ApprovalDecision, type ApprovalLayer } from './trail.js'
 import type { UiLocale } from './i18n.js'
@@ -242,6 +242,23 @@ export function applyAuthorizationPreset(state: string | null, event: SessionEve
   // source 是插件自有扩展字段，SessionEventMap 未声明（见 writeInheritedPreset）。
   const data = event.data as { preset: string; source?: unknown }
   return data.source === INHERITED_PRESET_SOURCE ? state : data.preset
+}
+
+/**
+ * 授权投影的注册定义。
+ *
+ * 提取为独立常量并显式标注类型（与官方各包的「先定义常量、再传入 register」样式一致）：
+ * 内联对象字面量传入 register 时，TS 需在泛型反向推断与
+ * `Omit<ProjectionDefinition<...>, 'wire'>` 的实例化之间互相求值；DSH 0.2.1-alpha.3 起
+ * SessionProjectionStateMap 经 declaration merging 扩大后，该推断链超出 TS 深度上限
+ * （TS2589 / 编译期 OOM）。
+ */
+export const authorizationProjectionDefinition: ProjectionDefinition<'autogatePermission', string | null> = {
+  key: AUTHORIZATION_PROJECTION_KEY,
+  stateVersion: 1,
+  stateSchema: authorizationPresetSchema,
+  init: () => null,
+  apply: applyAuthorizationPreset,
 }
 
 /**
@@ -774,13 +791,7 @@ export function apply(ctx: Context, config: Partial<Config> = {}): void {
   // 注册表未挂载或 key 未注册时恒为 undefined：未命中即 fail-closed，不授予任何自动审批。
   let resolvePreset: PermissionPresetResolver = () => undefined
   ctx.inject(['sessionProjections'], (pctx) => {
-    pctx.sessionProjections.register({
-      key: AUTHORIZATION_PROJECTION_KEY,
-      stateVersion: 1,
-      stateSchema: authorizationPresetSchema,
-      init: () => null,
-      apply: applyAuthorizationPreset,
-    })
+    pctx.sessionProjections.register(authorizationProjectionDefinition)
     resolvePreset = session => pctx.sessionProjections.stateOf(session, AUTHORIZATION_PROJECTION_KEY) ?? undefined
   })
   const authorityOf = (target: ToolExecution['agent']) => managedPermissionAuthority(target, parentAgent, resolvePreset, presetName, fullAutoPresetName)

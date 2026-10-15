@@ -2,6 +2,7 @@ import type { Context, Volatile } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
 import type { ToolExecution } from '@deepseek-ai/dsh-tools';
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session';
+import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection';
 import type { ManagedMode } from './types.js';
 export * from './paths.js';
 export * from './policy.js';
@@ -115,6 +116,16 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
  * ——注册表以 `Object.is` 判定状态变化，同引用不产生下游工作。
  */
 export declare function applyAuthorizationPreset(state: string | null, event: SessionEvent): string | null;
+/**
+ * 授权投影的注册定义。
+ *
+ * 提取为独立常量并显式标注类型（与官方各包的「先定义常量、再传入 register」样式一致）：
+ * 内联对象字面量传入 register 时，TS 需在泛型反向推断与
+ * `Omit<ProjectionDefinition<...>, 'wire'>` 的实例化之间互相求值；DSH 0.2.1-alpha.3 起
+ * SessionProjectionStateMap 经 declaration merging 扩大后，该推断链超出 TS 深度上限
+ * （TS2589 / 编译期 OOM）。
+ */
+export declare const authorizationProjectionDefinition: ProjectionDefinition<'autogatePermission', string | null>;
 /**
  * 解析一个会话的授权预设：读本插件的授权投影，key 未注册或注册表未挂载时返回 undefined。
  * 未命中一律 fail-closed（调用方视作「非托管 Auto」，不授予任何自动审批）。 */
