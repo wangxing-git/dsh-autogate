@@ -102,12 +102,6 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     showTrail: z<boolean, boolean, "volatile-defined">;
     fullAutoPresetName: z<string, string, "volatile-defined">;
 }>>, "plain">;
-declare module '@deepseek-ai/dsh-session-projection/types' {
-    interface SessionProjectionStateMap {
-        /** 最近一次用户真实切换（非 {@link INHERITED_PRESET_SOURCE} 继承标记）的权限预设名；无则为 null。 */
-        autogatePermission: string | null;
-    }
-}
 /**
  * 授权投影单元的单事件转移：记录最近一次「用户真实切换」的权限预设名。
  *

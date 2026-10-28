@@ -17,21 +17,32 @@ interface ProjectionUnitLike {
   apply: (state: any, event: any) => unknown
 }
 
-/** 注册表替身：`register` 返回 disposer（测试中为 no-op，单元留存至用例结束）。 */
+/** 注册表替身：`register` 按 0.2.2 契约返回 Promise<ProjectionHandle>（单元同步落表，句柄可读）。 */
 export function createSessionProjections() {
   const units = new Map<string, ProjectionUnitLike>()
+  const fold = (unit: ProjectionUnitLike, session: any): unknown => {
+    let state = unit.init(session?.header, 0)
+    for (const event of session?.snapshotEvents?.() ?? []) state = unit.apply(state, event)
+    return state
+  }
   return {
-    register(definition: ProjectionUnitLike): () => void {
+    register(definition: ProjectionUnitLike): Promise<{
+      stateOf: (session: any) => unknown
+      readerFor: (session: any) => () => unknown
+      dispose: () => Promise<void>
+    }> {
       units.set(definition.key, definition)
-      return () => {}
+      return Promise.resolve({
+        stateOf: (session: any) => fold(definition, session),
+        readerFor: (session: any) => () => fold(definition, session),
+        dispose: async () => { units.delete(definition.key) },
+      })
     },
-    /** key 未注册时返回 undefined（与真实注册表一致，调用方据此 fail-closed）。 */
+    /** 兼容读法（官方 @deprecated，autogate 仅在注册窗口内使用）：key 未注册时返回 undefined。 */
     stateOf(session: any, key: string): unknown {
       const unit = units.get(key)
       if (unit === undefined) return undefined
-      let state = unit.init(session?.header, 0)
-      for (const event of session?.snapshotEvents?.() ?? []) state = unit.apply(state, event)
-      return state
+      return fold(unit, session)
     },
   }
 }
