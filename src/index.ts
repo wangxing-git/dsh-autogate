@@ -8,6 +8,8 @@ import { resolveRoots, type RootOptions } from './paths.js'
 import { assessTool, hardDenyReason, isSandboxEscalationRetry, summarizeToolArguments } from './policy.js'
 import { setApprovalPolicy, type ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+// 引入 declaration merging：'agent/created' 事件类型由 dsh-agent 扩展（子代理权限继承的写入时机，见 apply 内注释）。
+import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-settings'
 // 引入 declaration merging：'loader/volatile-update' 事件类型（配置热更新派发）由 loader 扩展。
 import type {} from '@deepseek-ai/cordis-plugin-loader'
@@ -813,10 +815,14 @@ export function apply(ctx: Context, config: Partial<Config> = {}): void {
   // approval/request 事件触发前被 decide() 短路拒绝，LLM 终审收不到。对「父会话是托管 Auto」的子代理把
   // approval 改回 ask，让提权请求走到 approval/request 由 LLM 终审裁决；非 Auto 子代理保持 DSH 默认
   // never（fail-closed，不放开）。
-  // 时序依赖：dsh-subagent 在子代理 session 未发布窗口（unpublished creation window）内追加 delegation 的
-  // never，而 session/created 在 announce（发布）时触发、晚于该窗口，故此处追加的 ask 覆盖 never 生效；
-  // 若 DSH 未来改为在 announce 之后追加 delegation 覆盖，本放开逻辑会失效需重新评估。
-  ctx.on('session/created', (session) => {
+  // 时序约束：必须挂 agent/created，禁止挂 session/created。DSH 0.2.2 起 SessionStore.announce 先把
+  // announcement 置为 'dispatching' 再同步派发 session/created，该窗口内 Session 只读——任何
+  // session.append 都会抛「cannot append before session/created completes」，监听器抛错会让 announce
+  // 失败，整个子代理创建直接回滚。agent/created 在 session announce 与 setup（dsh-subagent 在此追加
+  // delegation 的 never）之后串行派发，此时 Session 已可写，且早于子代理第一次工具调用，后写的 ask
+  // 稳定覆盖 delegation 的 never。
+  ctx.on('agent/created', (payload): undefined => {
+    const session = payload.agent.session
     const header = session.header
     if (header.origin !== 'subagent') return
     const parentId = header.parentSession
@@ -839,11 +845,17 @@ export function apply(ctx: Context, config: Partial<Config> = {}): void {
     // 只影响投影显示；授权解析（applyAuthorizationPreset / resolvePreset）跳过该标记，授权依据仍锚定顶层 Auto 会话。
     // source 是插件自有扩展字段，SessionEventMap 未声明；运行时 dsh-permission-presets 的投影
     // 只读 data.preset、忽略其余字段，带 source 不影响投影。
-    session.append('permission/preset', {
-      preset: authority.mode === 'semi-auto' ? presetName : fullAutoPresetName,
-      source: INHERITED_PRESET_SOURCE,
-    } as { preset: string })
-    setApprovalPolicy(session, 'ask')
+    try {
+      session.append('permission/preset', {
+        preset: authority.mode === 'semi-auto' ? presetName : fullAutoPresetName,
+        source: INHERITED_PRESET_SOURCE,
+      } as { preset: string })
+      setApprovalPolicy(session, 'ask')
+    } catch (error) {
+      // 会话在派发窗口内被回滚/释放时写入失败：保持 DSH 默认 never（fail-closed），
+      // 不得让异常冒泡——agent/created 是串行派发，抛错会阻断子代理创建。
+      ctx.logger.warn('autogate: 子代理权限档继承写入失败，保持默认 never', error)
+    }
   })
 
   /** 取 agent 所属会话的 id（字符串）；无 agent 或无 header.id 时返回空字符串。 */

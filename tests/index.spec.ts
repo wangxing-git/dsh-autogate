@@ -1162,7 +1162,7 @@ describe('managedPermissionAuthority', () => {
   })
 })
 
-describe('session/created 监听器（子代理 approval 放开）', () => {
+describe('agent/created 监听器（子代理 approval 放开）', () => {
   function makeSession(origin: string, parentSession?: string) {
     const appended: Array<[string, unknown]> = []
     return {
@@ -1174,13 +1174,16 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
     }
   }
 
+  /** agent/created 的 payload 形状：监听器只读 payload.agent.session。 */
+  const payloadOf = (session: unknown) => ({ agent: { session } })
+
   it('Auto 父会话的子代理 → 继承权限档并放开为 ask', () => {
     const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
     const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
     apply(ctx as any)
-    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const listener = listeners.get('agent/created')![0] as unknown as (payload: any) => void
     const { appended, session } = makeSession('subagent', 'sess-parent')
-    listener(session)
+    listener(payloadOf(session))
     expect(appended).toEqual([
       ['permission/preset', { preset: 'auto-ask', source: 'autogate' }],
       ['approval/policy', { policy: 'ask' }],
@@ -1190,9 +1193,9 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
     const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-full' } }], header: { origin: 'primary' } } }
     const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
     apply(ctx as any)
-    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const listener = listeners.get('agent/created')![0] as unknown as (payload: any) => void
     const { appended, session } = makeSession('subagent', 'sess-parent')
-    listener(session)
+    listener(payloadOf(session))
     expect(appended).toEqual([
       ['permission/preset', { preset: 'auto-full', source: 'autogate' }],
       ['approval/policy', { policy: 'ask' }],
@@ -1202,9 +1205,9 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
   it('非子代理 session → 不放开', () => {
     const { ctx, listeners } = createMockContext(allowChunks)
     apply(ctx as any)
-    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const listener = listeners.get('agent/created')![0] as unknown as (payload: any) => void
     const { appended, session } = makeSession('primary')
-    listener(session)
+    listener(payloadOf(session))
     expect(appended).toHaveLength(0)
   })
 
@@ -1212,18 +1215,18 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
     const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'read-only' } }], header: { origin: 'primary' } } }
     const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
     apply(ctx as any)
-    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const listener = listeners.get('agent/created')![0] as unknown as (payload: any) => void
     const { appended, session } = makeSession('subagent', 'sess-parent')
-    listener(session)
+    listener(payloadOf(session))
     expect(appended).toHaveLength(0)
   })
 
   it('父 agent 缺失 → 不放开（fail-closed）', () => {
     const { ctx, listeners } = createMockContext(allowChunks)
     apply(ctx as any)
-    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const listener = listeners.get('agent/created')![0] as unknown as (payload: any) => void
     const { appended, session } = makeSession('subagent', 'sess-missing')
-    listener(session)
+    listener(payloadOf(session))
     expect(appended).toHaveLength(0)
   })
 
@@ -1234,9 +1237,9 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
     const agentsMap = new Map([['sess-top', top], ['sess-middle', middle]])
     const { ctx, listeners } = createMockContext(allowChunks, agentsMap)
     apply(ctx as any)
-    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const listener = listeners.get('agent/created')![0] as unknown as (payload: any) => void
     const { appended, session } = makeSession('subagent', 'sess-middle')
-    listener(session)
+    listener(payloadOf(session))
     expect(appended).toEqual([
       ['permission/preset', { preset: 'auto-ask', source: 'autogate' }],
       ['approval/policy', { policy: 'ask' }],
@@ -1247,17 +1250,36 @@ describe('session/created 监听器（子代理 approval 放开）', () => {
     const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
     const { ctx, listeners } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
     apply(ctx as any)
-    const listener = listeners.get('session/created')![0] as unknown as (session: any) => void
+    const listener = listeners.get('agent/created')![0] as unknown as (payload: any) => void
     const events: any[] = [{ type: 'approval/policy', data: { policy: 'never', source: 'delegation' } }]
     const session = {
       header: { origin: 'subagent', parentSession: 'sess-parent' },
       snapshotEvents: () => events,
       append: (type: string, data: unknown) => { events.push({ type, data }) },
     }
-    listener(session)
+    listener(payloadOf(session))
     expect(events.map(e => e.type)).toEqual(['approval/policy', 'permission/preset', 'approval/policy'])
     expect(events.map(e => (e.type === 'approval/policy' ? e.data.policy : e.data.preset))).toEqual(['never', 'auto-ask', 'ask'])
     expect((events[1].data as any).source).toBe('autogate')
+  })
+
+  it('回归：不在 session/created 派发窗口写入（该窗口 Session 只读，append 会让子代理创建回滚）', () => {
+    const { ctx, listeners } = createMockContext(allowChunks)
+    apply(ctx as any)
+    expect(listeners.get('session/created') ?? []).toHaveLength(0)
+  })
+
+  it('写入抛错时吞掉异常并告警，不阻断子代理创建', () => {
+    const parent = { session: { snapshotEvents: () => [{ type: 'permission/preset', data: { preset: 'auto-ask' } }], header: { origin: 'primary' } } }
+    const { ctx, listeners, logCalls } = createMockContext(allowChunks, new Map([['sess-parent', parent]]))
+    apply(ctx as any)
+    const listener = listeners.get('agent/created')![0] as unknown as (payload: any) => void
+    const session = {
+      header: { origin: 'subagent', parentSession: 'sess-parent' },
+      append: () => { throw new Error('cannot append before session/created completes') },
+    }
+    expect(() => listener(payloadOf(session))).not.toThrow()
+    expect(logCalls.some(([level, message]) => level === 'warn' && String(message).includes('子代理权限档继承写入失败'))).toBe(true)
   })
 })
 
